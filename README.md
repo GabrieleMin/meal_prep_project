@@ -1,23 +1,71 @@
-# meal_prep_project
-# MEAL PLANNER - pantry, recipes, and meal plan (desktop program)
+# Meal Prep Project
 
-Requirements: Python 3.10 or higher. No external libraries (standard library only, including Tkinter; on Linux, if missing, install the `python3-tk` system package).
+## MEAL PLANNER - Pantry, recipes, and meal plan (Desktop program)
 
-STARTUP: `python gui.py`
-On the first run, it creates the `inventario.db` database in the same folder.
+**Requirements:** Python 3.10 or higher. No external libraries required (only the standard library, **Tkinter** included; on Linux, if it's missing, install the `python3-tk` system package).
 
-HOW TO GET STARTED (window tabs)
-1. **Profile** - set gender, activity level, and goal: required for daily kcal.
-2. **Pantry** - add products (the first time you enter a new name, it asks for the unit and nutritional values per 100 g).
-3. **Recipes** - enter recipes manually from the form or import them from .json / .csv files.
-4. **Plan** - "Propose plan", then "Save plan"; when you cook, "Mark as cooked" (indicate how many portions: the rest become leftovers). You can lock or skip a meal.
-5. **Shopping** - shows what is missing (consumption exceeding availability and plan ingredients).
+### Startup
 
-RECIPE IMPORT (quantities are for ONE portion; units: g, kg, ml, L, pcs, tbsp, tsp)
-JSON: `[{"nome": "Riso e pollo", "pasti": ["pranzo", "cena"], "ingredienti": [{"prodotto": "Riso", "quantita": 100, "unita": "g"}]}]`
-CSV (separator ; or ,): `ricetta;pasti;prodotto;quantita;unita;quanto_basta` (meals separated by |)
+To start the program, run:
 
-COMMAND LINE (optional)
-`python motore.py ricette | giorno ... | profilo ...`
-`python pianificatore.py giorno | settimana | spesa`
-`python ricette.py importa file.json`
+```bash
+python gui.py
+```
+
+> *Note: On the first run, the program will automatically create the `inventario.db` database in the same folder.*
+
+### How to Get Started (Window tabs)
+
+1. **Profile** - Set gender, activity level, and goal: required to calculate daily kcal.
+
+2. **Pantry** - Add products (the first time you enter a new name, you will be asked for the unit of measurement and nutritional values per 100 g).
+
+3. **Recipes** - Enter recipes manually using the form, or import them from `.json` or `.csv` files.
+
+4. **Plan** - Click "Propose plan", then "Save plan". When you cook, use "Mark as cooked" (indicate how many portions you prepared: the extra ones will become leftovers). You can also lock or skip a meal.
+
+5. **Shopping** - Shows what is missing (calculating consumption that exceeds availability and ingredients needed for future plans).
+
+### Recipe Import
+
+The quantities indicated must be for **ONE** portion.
+
+**Supported units:** `g`, `kg`, `ml`, `L`, `pcs`, `tbsp`, `tsp`.
+
+#### JSON Format
+
+*(Note: JSON keys are kept in Italian assuming your Python code expects them).*
+
+```json
+[
+  {
+    "nome": "Rice and chicken", 
+    "pasti": ["pranzo", "cena"],
+    "ingredienti": [
+      {
+        "prodotto": "Rice", 
+        "quantita": 100, 
+        "unita": "g"
+      }
+    ]
+  }
+]
+```
+
+#### CSV Format
+
+Use `;` or `,` as a separator. Multiple meals must be separated by the `|` character.
+
+```csv
+ricetta;pasti;prodotto;quantita;unita;quanto_basta
+```
+
+### Command Line (Optional)
+
+You can also interact with the program via the terminal:
+
+```bash
+python motore.py ricette | giorno ... | profilo ...
+python pianificatore.py giorno | settimana | spesa
+python ricette.py importa file.json
+```
