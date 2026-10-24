@@ -1,67 +1,23 @@
-# Meal Prep Project
+# meal_prep_project
+# MEAL PLANNER - pantry, recipes, and meal plan (desktop program)
 
-## MEAL PLANNER - Dispensa, ricette e piano dei pasti (Programma desktop)
+Requirements: Python 3.10 or higher. No external libraries (standard library only, including Tkinter; on Linux, if missing, install the `python3-tk` system package).
 
-**Requisiti:** Python 3.10 o superiore. Nessuna libreria esterna (solo libreria standard, **Tkinter** incluso; su Linux, se manca, installa il pacchetto di sistema `python3-tk`).
+STARTUP: `python gui.py`
+On the first run, it creates the `inventario.db` database in the same folder.
 
-### Avvio
+HOW TO GET STARTED (window tabs)
+1. **Profile** - set gender, activity level, and goal: required for daily kcal.
+2. **Pantry** - add products (the first time you enter a new name, it asks for the unit and nutritional values per 100 g).
+3. **Recipes** - enter recipes manually from the form or import them from .json / .csv files.
+4. **Plan** - "Propose plan", then "Save plan"; when you cook, "Mark as cooked" (indicate how many portions: the rest become leftovers). You can lock or skip a meal.
+5. **Shopping** - shows what is missing (consumption exceeding availability and plan ingredients).
 
-Per avviare il programma, esegui:
+RECIPE IMPORT (quantities are for ONE portion; units: g, kg, ml, L, pcs, tbsp, tsp)
+JSON: `[{"nome": "Riso e pollo", "pasti": ["pranzo", "cena"], "ingredienti": [{"prodotto": "Riso", "quantita": 100, "unita": "g"}]}]`
+CSV (separator ; or ,): `ricetta;pasti;prodotto;quantita;unita;quanto_basta` (meals separated by |)
 
-```bash
-python gui.py
-```
-
-> *Nota: Al primo avvio, il programma creerà automaticamente il database `inventario.db` nella stessa cartella.*
-
----
-
-### Come Iniziare (Schede della finestra)
-
-1. **Profilo** - Imposta sesso, attività e obiettivo: serve per calcolare le kcal giornaliere.
-2. **Dispensa** - Aggiungi i prodotti (la prima volta che inserisci un nome nuovo ti verranno chieste l'unità di misura e i valori nutrizionali per 100 g).
-3. **Ricette** - Inserisci le ricette manualmente dal modulo oppure importale da file `.json` o `.csv`.
-4. **Piano** - Clicca su "Proponi piano", poi "Salva piano". Quando cucini, usa "Segna come cucinato" (indica quante porzioni hai preparato: quelle in più diventeranno avanzi). Puoi anche bloccare o saltare un pasto.
-5. **Spesa** - Mostra cosa manca (calcolando i consumi che superano la disponibilità e gli ingredienti necessari per i piani futuri).
-
----
-
-### Import Ricette
-
-Le quantità indicate devono essere per **UNA** porzione.  
-**Unità supportate:** `g`, `kg`, `ml`, `L`, `pz`, `cucchiaio`, `cucchiaino`.
-
-#### Formato JSON
-```json
-[
-  {
-    "nome": "Riso e pollo", 
-    "pasti": ["pranzo", "cena"],
-    "ingredienti": [
-      {
-        "prodotto": "Riso", 
-        "quantita": 100, 
-        "unita": "g"
-      }
-    ]
-  }
-]
-```
-
-#### Formato CSV
-Utilizza come separatore `;` oppure `,`. I pasti multipli vanno separati dal carattere `|`.
-```csv
-ricetta;pasti;prodotto;quantita;unita;quanto_basta
-```
-
----
-
-### Riga di Comando (Facoltativa)
-
-Puoi interagire con il programma anche da terminale:
-
-```bash
-python motore.py ricette | giorno ... | profilo ...
-python pianificatore.py giorno | settimana | spesa
-python ricette.py importa file.json
-```
+COMMAND LINE (optional)
+`python motore.py ricette | giorno ... | profilo ...`
+`python pianificatore.py giorno | settimana | spesa`
+`python ricette.py importa file.json`
