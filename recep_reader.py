@@ -26,9 +26,9 @@ USA_GPU = configura_dispositivo_gpu()
 # CONFIGURAZIONE TAGLI E PARAMETRI (Aggiornati empiricamente)
 # =====================================================================
 TAGLIO_ALTO_RATIO = 0.15  # Taglia l'intestazione superiore
-TAGLIO_DESTRA_RATIO = 0.68  # Taglia i prezzi a destra
+TAGLIO_DESTRA_RATIO = 0.615  # Taglia i prezzi a destra
 FATTORE_INGRANDIMENTO = 2.0
-TOLLERANZA_Y_RIGA = 18
+TOLLERANZA_Y_RIGA = 4.5
 
 FILE_DEBUG_FINALE = "debug_solo_spesa.jpg"
 
