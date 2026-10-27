@@ -1,0 +1,9 @@
+easyocr==1.7.2
+numba==0.68.0
+numpy==2.5.4
+opencv_python==5.0.0.93
+opencv_python_headless==5.0.0.93
+rapidfuzz==3.14.6
+torch==2.9.1
+opencv-python
+scripts

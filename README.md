@@ -1,71 +1,60 @@
-# Meal Prep Project
+# Meal Planner
 
-## MEAL PLANNER - Pantry, recipes, and meal plan (Desktop program)
+Desktop application (Tkinter) to manage a pantry, store recipes and plan meals that respect nutritional
+limits while using already-opened packages first. Standard library only: Python 3.10+ (on Linux install the
+system package `python3-tk` if Tkinter is missing).
 
-**Requirements:** Python 3.10 or higher. No external libraries required (only the standard library, **Tkinter** included; on Linux, if it's missing, install the `python3-tk` system package).
+## Run
 
-### Startup
+    python -m meal_planner          # opens the window; creates inventory.db in the project root on first start
 
-To start the program, run:
+The database path can be changed with the `MEAL_PLANNER_DB` environment variable.
 
-```bash
-python gui.py
-```
+**Coming from the earlier Italian-named version?** Convert your old database once (the old file is never modified):
 
-> *Note: On the first run, the program will automatically create the `inventario.db` database in the same folder.*
+    python -m scripts.migrate_legacy_db inventario.db inventory.db
 
-### How to Get Started (Window tabs)
+## Getting started (tabs)
 
-1. **Profile** - Set gender, activity level, and goal: required to calculate daily kcal.
+1. **Profile** - set sex, activity level and goal (daily kcal target).
+2. **Pantry** - add products (a new name asks for unit and values per 100 g) and consume quantities.
+3. **Recipes** - add recipes with the form or import `.json` / `.csv` files; delete unused ones.
+4. **Plan** - *Propose plan*, *Save plan*, then *Mark as cooked* (number of servings: extra servings become
+   leftovers). Meals can be locked to a recipe or skipped.
+5. **Shopping** - what is missing (consumption beyond availability + ingredients of the plan).
 
-2. **Pantry** - Add products (the first time you enter a new name, you will be asked for the unit of measurement and nutritional values per 100 g).
+Meals are `breakfast`, `lunch`, `dinner`. Units: `kg`, `L`, `pcs` for products; `g`, `kg`, `ml`, `L`, `pcs`, `tbsp`, `tsp` in recipes.
 
-3. **Recipes** - Enter recipes manually using the form, or import them from `.json` or `.csv` files.
+### Recipe import (quantities are per ONE serving)
 
-4. **Plan** - Click "Propose plan", then "Save plan". When you cook, use "Mark as cooked" (indicate how many portions you prepared: the extra ones will become leftovers). You can also lock or skip a meal.
+    JSON: [{"name": "Chicken and rice", "meals": ["lunch", "dinner"],
+            "ingredients": [{"product": "Rice", "quantity": 100, "unit": "g"}]}]
+    CSV (";" or ","): recipe;meals;product;quantity;unit;to_taste        (meals separated by "|")
 
-5. **Shopping** - Shows what is missing (calculating consumption that exceeds availability and ingredients needed for future plans).
+## Project layout
 
-### Recipe Import
+    meal_planner/
+      db/           connection.py, schema.py (base tables), recipe_schema.py (recipes, plan, goals, views)
+      engine/       catalog (read data), nutrition (conversions, macros, limit checks),
+                    virtual_inventory (in-memory simulation), profile, constants, cli
+      planner/      day (daily planner), week (multi-day), storage (save plans, shopping list, "cooked"), cli
+      inventory.py  add / consume items, availability, shopping list
+      recipes.py    create, import, delete recipes
+      gui/          app (main window), widgets, dialogs, support
+    scripts/        setup_project.py, seed_inventory.py, seed_recipes.py (demo data), migrate_legacy_db.py
+    tests/          test_inventory, test_engine, test_planner, test_recipes
 
-The quantities indicated must be for **ONE** portion.
+## Command line (optional)
 
-**Supported units:** `g`, `kg`, `ml`, `L`, `pcs`, `tbsp`, `tsp`.
+    python -m meal_planner.engine profile --sex M --activity moderate --goal maintenance
+    python -m meal_planner.engine recipes
+    python -m meal_planner.engine day "Yogurt, apple and milk" "Tomato spaghetti" "Chicken and rice" --kcal 2500
+    python -m meal_planner.planner day --kcal 2000 --lock lunch="Chicken and rice" --skip dinner --save
+    python -m meal_planner.planner week --start 2026-10-26 --days 7 --save
+    python -m meal_planner.planner shopping
+    python -m meal_planner.recipes import recipes.json
 
-#### JSON Format
+## Development
 
-*(Note: JSON keys are kept in Italian assuming your Python code expects them).*
-
-```json
-[
-  {
-    "nome": "Rice and chicken", 
-    "pasti": ["pranzo", "cena"],
-    "ingredienti": [
-      {
-        "prodotto": "Rice", 
-        "quantita": 100, 
-        "unita": "g"
-      }
-    ]
-  }
-]
-```
-
-#### CSV Format
-
-Use `;` or `,` as a separator. Multiple meals must be separated by the `|` character.
-
-```csv
-ricetta;pasti;prodotto;quantita;unita;quanto_basta
-```
-
-### Command Line (Optional)
-
-You can also interact with the program via the terminal:
-
-```bash
-python motore.py ricette | giorno ... | profilo ...
-python pianificatore.py giorno | settimana | spesa
-python ricette.py importa file.json
-```
+    python -m scripts.setup_project --test      # database, demo data, integrity check, all test suites
+    python -m scripts.setup_project --reset -y  # wipe and reload demo data

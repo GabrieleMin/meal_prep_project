@@ -1,2 +1,5 @@
-#inventario personale
+__pycache__/
+*.pyc
 *.db
+.venv/
+setup_environment.log
