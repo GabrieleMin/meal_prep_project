@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meal-planner"
+version = "0.1.0"
+description = "Pantry inventory, recipes and nutrition-aware meal planning (desktop application)"
+requires-python = ">=3.10"
+dependencies = ["sv-ttk"]  # light/dark theme for the GUI (Tkinter and SQLite are included with Python)
+
+[project.gui-scripts]
+meal-planner = "meal_planner.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["meal_planner*"]
