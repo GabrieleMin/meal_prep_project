@@ -199,6 +199,22 @@ def migrate(conn: sqlite3.Connection) -> None:
             No_repeat_days  INTEGER NOT NULL DEFAULT 3 CHECK (No_repeat_days >= 0)
         );
     """)
+    for column, ddl in (("Target_weight_kg", "REAL CHECK (Target_weight_kg > 0)"),
+                        ("Weekly_rate_kg", "REAL CHECK (Weekly_rate_kg > 0)"),
+                        ("Maintenance_manual", "REAL CHECK (Maintenance_manual > 0)"),
+                        ("Use_manual_maintenance", "INTEGER NOT NULL DEFAULT 0"),
+                        ("Kcal_manual", "REAL CHECK (Kcal_manual > 0)"),
+                        ("Use_manual_kcal", "INTEGER NOT NULL DEFAULT 0"),
+                        ("Default_servings", "INTEGER NOT NULL DEFAULT 1 CHECK (Default_servings BETWEEN 1 AND 20)")):
+        _add_column(conn, "PROFILE", column, ddl)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS WEIGHT_LOG (
+            Date          TEXT PRIMARY KEY,
+            Weight_kg     REAL NOT NULL CHECK (Weight_kg > 0),
+            Body_fat_pct  REAL CHECK (Body_fat_pct >= 0),
+            Waist_cm      REAL CHECK (Waist_cm > 0)
+        );
+    """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS GOALS (
             Nutrient  TEXT NOT NULL

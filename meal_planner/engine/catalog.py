@@ -40,8 +40,9 @@ def group_members(conn, group_id: int) -> list:
 def load_profile(conn) -> dict:
     cur = conn.execute(
         "SELECT Weight_kg, Height_cm, Age_years, Sex, Activity_Level, Goal, "
-        "Kcal_target, Kcal_tolerance_pct, Open_extra_pct, No_repeat_days "
-        "FROM PROFILE WHERE ID = 1")
+        "Kcal_target, Kcal_tolerance_pct, Open_extra_pct, No_repeat_days, Target_weight_kg, "
+        "Weekly_rate_kg, Maintenance_manual, Use_manual_maintenance, Kcal_manual, Use_manual_kcal, "
+        "Default_servings FROM PROFILE WHERE ID = 1")
     r = cur.fetchone()
     if r is None:
         raise RuntimeError("Profile missing: run meal_planner.db.recipe_schema first")

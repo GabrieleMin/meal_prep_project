@@ -4,6 +4,7 @@ numpy==2.5.4
 opencv_python==5.0.0.93
 opencv_python_headless==5.0.0.93
 rapidfuzz==3.14.6
+sv-ttk==2.6.1
 torch==2.9.1
 opencv-python
 scripts

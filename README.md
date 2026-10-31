@@ -58,3 +58,7 @@ Meals are `breakfast`, `lunch`, `dinner`. Units: `kg`, `L`, `pcs` for products; 
 
     python -m scripts.setup_project --test      # database, demo data, integrity check, all test suites
     python -m scripts.setup_project --reset -y  # wipe and reload demo data
+
+## Future Implementations
+- poter dire al planner di voler cucinare oggi i pasti per, per es. lunedì e mercoledì (meal prep) e fargliene tenere conto per gli altri pasti
+- inserire campo per data di scadenza dell'alimento

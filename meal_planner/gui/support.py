@@ -6,7 +6,7 @@ import contextlib
 from meal_planner.db.connection import get_connection
 
 
-RED, GREEN = "#b42318", "#067647"
+RED, GREEN = "#e5484d", "#30a46c"      # readable on both the light and the dark theme
 
 
 @contextlib.contextmanager

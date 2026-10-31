@@ -19,4 +19,7 @@ KCAL_PER_G = {"Protein": 4.0, "Carbs": 4.0, "Sugars": 4.0,
 PAL = {"light": 1.4, "moderate": 1.6, "heavy": 1.75}
 
 
+KCAL_PER_KG = 7700      # energy of 1 kg of body weight, used for the weekly weight-change rate
+
+
 EPS = 1e-9
