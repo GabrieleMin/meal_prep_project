@@ -60,5 +60,23 @@ Meals are `breakfast`, `lunch`, `dinner`. Units: `kg`, `L`, `pcs` for products; 
     python -m scripts.setup_project --reset -y  # wipe and reload demo data
 
 ## Future Implementations
-- poter dire al planner di voler cucinare oggi i pasti per, per es. lunedì e mercoledì (meal prep) e fargliene tenere conto per gli altri pasti
-- inserire campo per data di scadenza dell'alimento
+**Meal Planning & Suggestion Engine**
+
+* **Advance Meal Prep Scheduling:** Allow the user to schedule the preparation of meals on the current day for specific future days (e.g., cooking today for Monday and Wednesday), automatically updating ingredient availability for the remaining days of the plan.
+* **Ingredient Variety Constraint (Day-Meal Association):** Prevent the generation engine from suggesting the same food items in preceding meals if those items are already assigned to future Meal Prep days, ensuring proper ingredient rotation.
+* **Expiring Food Priority:** Add a parameter to the planner algorithm to automatically prioritize ingredients that are closest to their expiration date during meal generation.
+* **Multi-Day Expiration Validation & Exclusion List:** During multi-day meal planning, validate each ingredient's expiration date against the specific target date of every scheduled meal. Automatically place any item that is already expired or will expire before the target meal date into an **Exclusion List**, preventing the engine from including it in meal proposals.
+* **Startup Expired Items Alert:** Trigger a warning pop-up at every application startup if the **Exclusion List** is not empty, notifying the user of the specific expired food items that need to be discarded.
+
+**Inventory, Locations & Expiration Management**
+
+* **Expiration Date Field:** Add a dedicated field to record the expiration date for each food item in the inventory.
+* **Visual Expiration Indicators:** Apply a color-coded red gradient in the main inventory list to indicate items approaching their expiration date, and highlight already expired items with a distinct, high-contrast alert color.
+* **Storage Location Management:** Create a dedicated section to create, edit, and rename physical storage locations for food items (e.g., fridge, pantry, freezer).
+
+**Receipt Interface & GUI**
+
+* **Receipt Module GUI Integration:** Align the visual style of the receipt module with the main application's design system and embed it directly into the primary GUI.
+* **Drag & Drop and File Explorer Upload:** Implement an interactive drop zone labeled *"Drag receipts here"*, paired with a dedicated button to open the native system file explorer for manual file selection.
+* **Last Upload Log:** Place a text field directly below the receipt upload area to record and display details or notes regarding the most recently imported receipt.
+* **Receipt Alias Mapping Modal:** Develop a secondary pop-up window triggered immediately after the receipt item selection interface, allowing users to map unrecognized or abbreviated receipt entries (aliases) to standardized food items in the database.
