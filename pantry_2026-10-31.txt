@@ -1,2 +1,0 @@
-# Product	Quantity	Unit	Location
-Seitan	0.2	kg	fridge
