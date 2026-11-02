@@ -31,7 +31,9 @@ import recepiet_reader as ls
 
 UNITA_COMUNI = ("pz", "kg", "g", "l", "ml", "cl")
 SOGLIA_BASSA_CONFIDENZA = 0.5
-COLORE_ATTENZIONE = "#fff3b0"      # sfondo dei nomi letti con bassa confidenza
+COLORE_ATTENZIONE = "#f5a524"      # testo dei nomi letti con bassa confidenza (leggibile su tema chiaro e scuro)
+ROSSO, VERDE = "#e5484d", "#30a46c"  # stessi colori di meal_planner.gui.support (errore / ok)
+RADICE_PROGETTO = Path(__file__).resolve().parents[1]
 
 
 # =====================================================================
@@ -96,6 +98,19 @@ def scrivi_out(items: Sequence[ls.ItemSpesa], percorso: Path) -> None:
 # =====================================================================
 # FINESTRA (tkinter)
 # =====================================================================
+def applica_tema_app(root) -> str:
+    """stesso tema (sv-ttk, chiaro/scuro da config.json) dell'app principale meal_planner."""
+    if str(RADICE_PROGETTO) not in sys.path:
+        sys.path.insert(0, str(RADICE_PROGETTO))
+    try:
+        from meal_planner.gui import theme
+        nome = theme.load()
+        theme.apply(nome)
+        return nome
+    except Exception:                   # sv-ttk assente: resta il tema ttk di default
+        return "light"
+
+
 class FinestraModifica:
     """tabella editabile degli articoli. tutti i testi sono in minuscolo."""
 
@@ -110,23 +125,26 @@ class FinestraModifica:
         root.title(titolo.lower())
         root.geometry("820x560")
         root.minsize(640, 360)
+        self.tema = applica_tema_app(root)
+        ttk.Style(root).configure("Attenzione.TEntry", foreground=COLORE_ATTENZIONE)
 
-        tk.Label(root, text=titolo.lower(), anchor="w", font=("TkDefaultFont", 11, "bold")
-                 ).pack(fill="x", padx=12, pady=(10, 0))
-        tk.Label(root, anchor="w", justify="left", wraplength=780, fg="#555555",
-                 text="check and correct the fields. a yellow background marks an uncertain "
-                      "reading. rows with an empty name are ignored."
-                 ).pack(fill="x", padx=12, pady=(0, 6))
+        intestazione = ttk.Frame(root, padding=(12, 10, 12, 0))
+        intestazione.pack(fill="x")
+        ttk.Label(intestazione, text=titolo.lower(), anchor="w",
+                  font=("TkDefaultFont", 11, "bold")).pack(fill="x")
+        ttk.Label(intestazione, anchor="w", justify="left", wraplength=780,
+                  text="check and correct the fields. an orange name marks an uncertain "
+                       "reading. rows with an empty name are ignored.").pack(fill="x", pady=(0, 6))
 
         # ---- area scorrevole ----
-        zona = tk.Frame(root)
+        zona = ttk.Frame(root)
         zona.pack(fill="both", expand=True, padx=12)
-        self.canvas = tk.Canvas(zona, highlightthickness=0)
+        self.canvas = tk.Canvas(zona, highlightthickness=0, background=self._sfondo())
         barra = ttk.Scrollbar(zona, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=barra.set)
         barra.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.interno = tk.Frame(self.canvas)
+        self.interno = ttk.Frame(self.canvas)
         self.canvas.create_window((0, 0), window=self.interno, anchor="nw")
         self.interno.bind("<Configure>", lambda e: self.canvas.configure(
             scrollregion=self.canvas.bbox("all")))
@@ -137,18 +155,18 @@ class FinestraModifica:
 
         for col, (testo, larg) in enumerate((("name", 38), ("quantity", 9), ("unit", 7),
                                              ("packages", 10))):
-            tk.Label(self.interno, text=testo, anchor="w", fg="#555555").grid(
-                row=0, column=col, sticky="w", padx=3)
+            ttk.Label(self.interno, text=testo, anchor="w").grid(
+                row=0, column=col, sticky="w", padx=3, pady=(0, 4))
 
         # ---- barra inferiore ----
         self.stato = tk.StringVar(value="")
-        self.etichetta_stato = tk.Label(root, textvariable=self.stato, anchor="w")
-        self.etichetta_stato.pack(fill="x", padx=12, pady=(6, 0))
-        barra_bottoni = tk.Frame(root)
+        self.etichetta_stato = ttk.Label(root, textvariable=self.stato, anchor="w", padding=6)
+        self.etichetta_stato.pack(fill="x", padx=6, pady=(6, 0))
+        barra_bottoni = ttk.Frame(root)
         barra_bottoni.pack(fill="x", padx=12, pady=10)
-        tk.Button(barra_bottoni, text="add row", command=self.aggiungi_riga).pack(side="left")
-        tk.Button(barra_bottoni, text="exit", command=root.destroy).pack(side="right")
-        tk.Button(barra_bottoni, text="save", command=self.salva, width=12).pack(side="right", padx=8)
+        ttk.Button(barra_bottoni, text="add row", command=self.aggiungi_riga).pack(side="left")
+        ttk.Button(barra_bottoni, text="exit", command=root.destroy).pack(side="right")
+        ttk.Button(barra_bottoni, text="save", command=self.salva, width=12).pack(side="right", padx=8)
         root.bind("<Control-s>", lambda e: self.salva())
 
         for v in voci:
@@ -167,9 +185,14 @@ class FinestraModifica:
                 widget.icursor(pos)
         var.trace_add("write", cb)
 
+    def _sfondo(self) -> str:
+        """sfondo del canvas = sfondo del tema (il canvas non e' un widget ttk)."""
+        return self.ttk.Style(self.root).lookup("TFrame", "background") or (
+            "#1c1c1c" if self.tema == "dark" else "#fafafa")
+
     def _messaggio(self, testo: str, errore: bool) -> None:
         self.stato.set(testo.lower())
-        self.etichetta_stato.configure(fg="#b00020" if errore else "#1b5e20")
+        self.etichetta_stato.configure(foreground=ROSSO if errore else VERDE)
 
     # ---- righe ----
     def aggiungi_riga(self, voce: Optional[Voce] = None) -> None:
@@ -181,20 +204,20 @@ class FinestraModifica:
                  for k in ("nome", "qta", "unita", "confezioni")}
         sospetta = voce.conf_ocr < SOGLIA_BASSA_CONFIDENZA
 
-        e_nome = tk.Entry(self.interno, textvariable=vars_["nome"], width=38)
+        e_nome = ttk.Entry(self.interno, textvariable=vars_["nome"], width=38)
         if sospetta:
-            e_nome.configure(bg=COLORE_ATTENZIONE)
-        e_qta = tk.Entry(self.interno, textvariable=vars_["qta"], width=9)
+            e_nome.configure(style="Attenzione.TEntry")
+        e_qta = ttk.Entry(self.interno, textvariable=vars_["qta"], width=9)
         e_unita = ttk.Combobox(self.interno, textvariable=vars_["unita"], width=6,
                                values=UNITA_COMUNI)
-        e_conf = tk.Entry(self.interno, textvariable=vars_["confezioni"], width=10)
+        e_conf = ttk.Entry(self.interno, textvariable=vars_["confezioni"], width=10)
         for col, w in enumerate((e_nome, e_qta, e_unita, e_conf)):
             w.grid(row=r, column=col, padx=3, pady=2, sticky="w")
         for chiave, w in zip(("nome", "qta", "unita", "confezioni"), (e_nome, e_qta, e_unita, e_conf)):
             self._forza_minuscolo(vars_[chiave], w)
 
         riga = {"vars": vars_, "conf_ocr": voce.conf_ocr, "widgets": [e_nome, e_qta, e_unita, e_conf]}
-        btn = tk.Button(self.interno, text="x", width=2,
+        btn = ttk.Button(self.interno, text="x", width=2,
                         command=lambda: self.rimuovi_riga(riga))
         btn.grid(row=r, column=4, padx=3)
         riga["widgets"].append(btn)
