@@ -5,21 +5,25 @@ import json
 import os
 
 import sv_ttk
+from meal_planner import config
 
 
-CONFIG = Path(os.environ.get("MEAL_PLANNER_CONFIG") or Path(__file__).resolve().parents[2] / "config.json")
+CONFIG = config.CONFIG_PATH
 
 
 def load():
-    try:
-        theme = json.loads(CONFIG.read_text(encoding="utf-8")).get("theme")
-    except (OSError, ValueError, AttributeError):
-        theme = None
+    theme = config.get("default_theme") or config.get("theme", "dark")
     return theme if theme in ("light", "dark") else "dark"
 
 
+def save_default(theme):
+    """Persists default startup theme."""
+    config.set_key("default_theme", theme)
+
+
 def save(theme):
-    CONFIG.write_text(json.dumps({"theme": theme}, indent=2), encoding="utf-8")
+    """Backwards compatible alias for save_default."""
+    save_default(theme)
 
 
 def apply(theme):

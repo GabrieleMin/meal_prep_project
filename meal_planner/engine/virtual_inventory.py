@@ -24,7 +24,8 @@ class VirtualInventory:
         return cls(rows, unit)
 
     def copy(self):
-        return VirtualInventory({k: [r[:] for r in v] for k, v in self.rows.items()}, self.unit)
+        # Copy-on-write: shallow copy of the dict; row lists are only cloned on consume()
+        return VirtualInventory(self.rows.copy(), self.unit)
 
     def availability(self, product_id: int) -> float:
         rows = self.rows.get(product_id, [])
@@ -52,9 +53,10 @@ class VirtualInventory:
                              "WHERE Row_ID = ?", (number, remainder, row_id))
 
     def consume(self, product_id: int, quantity: float) -> dict:
-        rows = self.rows.get(product_id, [])
+        orig_rows = self.rows.get(product_id, [])
+        rows = [r[:] for r in orig_rows]
         pz = self.unit[product_id] == "pcs"
-        disp = self.availability(product_id)
+        disp = sum(r[2] for r in rows) if pz else sum(r[2] * r[1] + r[3] for r in rows)
         shortfall = 0.0
         to_cover = quantity
         if disp < quantity:
@@ -82,15 +84,26 @@ class VirtualInventory:
                     from_open += withdrawal
             if remaining > 0:                        # phase 2: new units, FIFO
                 for r in rows:
-                    while remaining > 0 and r[2] > 0:
-                        r[2] -= 1
-                        open += 1
-                        if remaining >= r[1]:
-                            remaining -= r[1]
-                            r[3] = 0.0
+                    if remaining <= 0 or r[2] <= 0:
+                        continue
+                    max_weight = r[2] * r[1]
+                    if remaining >= max_weight:
+                        remaining = _arr(remaining - max_weight)
+                        open += r[2]
+                        r[2] = 0
+                        r[3] = 0.0
+                    else:
+                        full_packs = int(remaining // r[1])
+                        rem = _arr(remaining - (full_packs * r[1]))
+                        if rem > 0:
+                            r[2] -= (full_packs + 1)
+                            open += (full_packs + 1)
+                            r[3] = _arr(r[1] - rem)
                         else:
-                            r[3] = _arr(r[1] - remaining)
-                            remaining = 0.0
+                            r[2] -= full_packs
+                            open += full_packs
+                            r[3] = 0.0
+                        remaining = 0.0
                     if remaining <= 0:
                         break
         self.rows[product_id] = [r for r in rows if not (r[2] == 0 and r[3] == 0)]

@@ -1,23 +1,5 @@
 """
-test_pipeline_recepiet.py - primo passo della pipeline: scontrino -> revisione manuale -> out.txt
-
-uso:
-    python test_pipeline_recepiet.py percorso/scontrino.jpg
-    python test_pipeline_recepiet.py scontrino.png --out out.txt --taglio-alto 0 --taglio-destra 1.0
-    python test_pipeline_recepiet.py scontrino.png --senza-finestra     # salva subito, senza gui
-
-cosa fa:
-  1. legge lo scontrino con lettore_scontrini.py (ocr locale, nessun servizio online);
-  2. apre una finestra in inglese (tkinter, libreria standard) con una riga per ogni articolo
-     trovato e i campi modificabili: name, quantity, unit, packages;
-  3. premendo "save" (o ctrl+s) scrive out.txt.
-
-regola: tutto in minuscolo. i testi della finestra, quello che propone l'ocr e quello
-che l'utente digita (forzato in automatico) e il file out.txt non contengono maiuscole.
-
-formato di out.txt (una riga per articolo, separatore ';', nessuna intestazione):
-    nome;quantita;unita;confezioni
-    banane;0.838;kg;1
+meal_planner.receipts.pipeline - revisione manuale scontrino -> out.txt
 """
 from __future__ import annotations
 
@@ -25,15 +7,14 @@ import argparse
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
-import recepiet_reader as ls
+from meal_planner.receipts import reader as ls
 
 UNITA_COMUNI = ("pz", "kg", "g", "l", "ml", "cl")
 SOGLIA_BASSA_CONFIDENZA = 0.5
 COLORE_ATTENZIONE = "#f5a524"      # testo dei nomi letti con bassa confidenza (leggibile su tema chiaro e scuro)
 ROSSO, VERDE = "#e5484d", "#30a46c"  # stessi colori di meal_planner.gui.support (errore / ok)
-RADICE_PROGETTO = Path(__file__).resolve().parents[1]
 
 
 # =====================================================================
@@ -62,28 +43,40 @@ def leggi_voci(percorso: str, profilo: ls.Profilo = ls.PROFILO_DEFAULT,
 def valida_voci(voci: Sequence[Voce]) -> Tuple[List[ls.ItemSpesa], List[str]]:
     """converte le voci in tuple (nome, qta, unita, confezioni). le righe con nome vuoto
     vengono ignorate. ritorna (tuple valide, messaggi di errore in minuscolo)."""
+    import math
+
+    if voci is None:
+        return [], []
+
     items: List[ls.ItemSpesa] = []
     errori: List[str] = []
     for i, v in enumerate(voci, 1):
-        nome = " ".join(v.nome.lower().replace(";", " ").split())
+        if v is None:
+            continue
+        raw_name = str(v.nome) if v.nome is not None else ""
+        nome = " ".join(raw_name.lower().replace(";", " ").split())
         if not nome:
             continue
         try:
-            qta = float(v.qta.strip().replace(",", "."))
-            if qta <= 0:
+            raw_qta = str(v.qta) if v.qta is not None else ""
+            qta = float(raw_qta.strip().replace(",", "."))
+            if not math.isfinite(qta) or qta <= 0:
                 raise ValueError
-        except ValueError:
+        except (ValueError, TypeError):
             errori.append(f"row {i} ({nome}): invalid quantity")
             continue
-        unita = v.unita.strip().lower().replace(";", "")
+        raw_unita = str(v.unita) if v.unita is not None else ""
+        unita = raw_unita.strip().lower().replace(";", "")
         if not unita:
             errori.append(f"row {i} ({nome}): missing unit")
             continue
         try:
-            conf = int(v.confezioni.strip())
-            if conf < 1:
+            raw_conf = str(v.confezioni) if v.confezioni is not None else ""
+            conf_f = float(raw_conf.strip().replace(",", "."))
+            if not math.isfinite(conf_f) or not conf_f.is_integer() or conf_f < 1:
                 raise ValueError
-        except ValueError:
+            conf = int(conf_f)
+        except (ValueError, TypeError, OverflowError):
             errori.append(f"row {i} ({nome}): invalid packages (integer >= 1)")
             continue
         items.append((nome, qta, unita, conf))
@@ -100,8 +93,6 @@ def scrivi_out(items: Sequence[ls.ItemSpesa], percorso: Path) -> None:
 # =====================================================================
 def applica_tema_app(root) -> str:
     """stesso tema (sv-ttk, chiaro/scuro da config.json) dell'app principale meal_planner."""
-    if str(RADICE_PROGETTO) not in sys.path:
-        sys.path.insert(0, str(RADICE_PROGETTO))
     try:
         from meal_planner.gui import theme
         nome = theme.load()
@@ -114,12 +105,14 @@ def applica_tema_app(root) -> str:
 class FinestraModifica:
     """tabella editabile degli articoli. tutti i testi sono in minuscolo."""
 
-    def __init__(self, root, voci: Sequence[Voce], percorso_out: Path, titolo: str):
+    def __init__(self, root, voci: Sequence[Voce], percorso_out: Path, titolo: str,
+                 on_save: Optional[Callable[[List[ls.ItemSpesa]], None]] = None):
         import tkinter as tk
         from tkinter import ttk
         self.tk, self.ttk = tk, ttk
         self.root = root
         self.percorso_out = Path(percorso_out)
+        self.on_save = on_save
         self.righe: List[dict] = []
 
         root.title(titolo.lower())
@@ -128,17 +121,17 @@ class FinestraModifica:
         self.tema = applica_tema_app(root)
         ttk.Style(root).configure("Attenzione.TEntry", foreground=COLORE_ATTENZIONE)
 
-        intestazione = ttk.Frame(root, padding=(12, 10, 12, 0))
+        intestazione = ttk.Frame(root, padding=(14, 12, 14, 0))
         intestazione.pack(fill="x")
         ttk.Label(intestazione, text=titolo.lower(), anchor="w",
                   font=("TkDefaultFont", 11, "bold")).pack(fill="x")
         ttk.Label(intestazione, anchor="w", justify="left", wraplength=780,
-                  text="check and correct the fields. an orange name marks an uncertain "
-                       "reading. rows with an empty name are ignored.").pack(fill="x", pady=(0, 6))
+                  text="Check and correct the fields below. An orange name marks an uncertain "
+                       "reading. Rows with an empty name are ignored.").pack(fill="x", pady=(2, 6))
 
         # ---- area scorrevole ----
-        zona = ttk.Frame(root)
-        zona.pack(fill="both", expand=True, padx=12)
+        zona = ttk.Frame(root, style="Card.TFrame", padding=6)
+        zona.pack(fill="both", expand=True, padx=12, pady=4)
         self.canvas = tk.Canvas(zona, highlightthickness=0, background=self._sfondo())
         barra = ttk.Scrollbar(zona, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=barra.set)
@@ -148,25 +141,42 @@ class FinestraModifica:
         self.canvas.create_window((0, 0), window=self.interno, anchor="nw")
         self.interno.bind("<Configure>", lambda e: self.canvas.configure(
             scrollregion=self.canvas.bbox("all")))
-        for evento, delta in (("<Button-4>", -1), ("<Button-5>", 1)):      # linux
-            root.bind_all(evento, lambda e, d=delta: self.canvas.yview_scroll(d, "units"))
-        root.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(
-            -1 if e.delta > 0 else 1, "units"))                           # windows / mac
+        def _scroll_canvas(d):
+            try:
+                if self.canvas.winfo_exists():
+                    self.canvas.yview_scroll(d, "units")
+            except Exception:
+                pass
 
-        for col, (testo, larg) in enumerate((("name", 38), ("quantity", 9), ("unit", 7),
-                                             ("packages", 10))):
-            ttk.Label(self.interno, text=testo, anchor="w").grid(
-                row=0, column=col, sticky="w", padx=3, pady=(0, 4))
+        for w in (self.canvas, self.interno):
+            for evento, delta in (("<Button-4>", -1), ("<Button-5>", 1)):
+                w.bind(evento, lambda e, d=delta: _scroll_canvas(d), add="+")
+            w.bind("<MouseWheel>", lambda e: _scroll_canvas(-1 if e.delta > 0 else 1), add="+")
+
+        def _cleanup_scroll(event=None):
+            if event is None or event.widget == root:
+                for ev in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
+                    try:
+                        root.unbind_all(ev)
+                    except Exception:
+                        pass
+
+        root.bind("<Destroy>", _cleanup_scroll, add="+")
+
+        for col, (testo, larg) in enumerate((("Item Name", 38), ("Quantity", 9), ("Unit", 7),
+                                             ("Packages", 10))):
+            ttk.Label(self.interno, text=testo, anchor="w", font=("TkDefaultFont", 9, "bold")).grid(
+                row=0, column=col, sticky="w", padx=4, pady=(2, 6))
 
         # ---- barra inferiore ----
         self.stato = tk.StringVar(value="")
-        self.etichetta_stato = ttk.Label(root, textvariable=self.stato, anchor="w", padding=6)
-        self.etichetta_stato.pack(fill="x", padx=6, pady=(6, 0))
-        barra_bottoni = ttk.Frame(root)
-        barra_bottoni.pack(fill="x", padx=12, pady=10)
-        ttk.Button(barra_bottoni, text="add row", command=self.aggiungi_riga).pack(side="left")
-        ttk.Button(barra_bottoni, text="exit", command=root.destroy).pack(side="right")
-        ttk.Button(barra_bottoni, text="save", command=self.salva, width=12).pack(side="right", padx=8)
+        self.etichetta_stato = ttk.Label(root, textvariable=self.stato, anchor="w", padding=(14, 6))
+        self.etichetta_stato.pack(fill="x", padx=6, pady=(4, 0))
+        barra_bottoni = ttk.Frame(root, padding=(14, 10))
+        barra_bottoni.pack(fill="x", side="bottom")
+        ttk.Button(barra_bottoni, text="+ Add Item", command=self.aggiungi_riga).pack(side="left")
+        ttk.Button(barra_bottoni, text="Cancel", command=root.destroy).pack(side="right", padx=(6, 0))
+        ttk.Button(barra_bottoni, text="Save & Reconcile", style="Accent.TButton", command=self.salva, width=16).pack(side="right")
         root.bind("<Control-s>", lambda e: self.salva())
 
         for v in voci:
@@ -217,7 +227,7 @@ class FinestraModifica:
             self._forza_minuscolo(vars_[chiave], w)
 
         riga = {"vars": vars_, "conf_ocr": voce.conf_ocr, "widgets": [e_nome, e_qta, e_unita, e_conf]}
-        btn = ttk.Button(self.interno, text="x", width=2,
+        btn = ttk.Button(self.interno, text="✕", style="Toolbutton", width=2,
                         command=lambda: self.rimuovi_riga(riga))
         btn.grid(row=r, column=4, padx=3)
         riga["widgets"].append(btn)
@@ -246,13 +256,20 @@ class FinestraModifica:
             self._messaggio(f"not saved: {e}", errore=True)
             return False
         self._messaggio(f"saved: {len(items)} rows in {self.percorso_out.name}", errore=False)
+        if self.on_save:
+            self.on_save(items)
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
         return True
 
 
-def apri_finestra(voci: Sequence[Voce], percorso_out: Path, titolo: str) -> None:
+def apri_finestra(voci: Sequence[Voce], percorso_out: Path, titolo: str,
+                  on_save: Optional[Callable[[List[ls.ItemSpesa]], None]] = None) -> None:
     import tkinter as tk
     root = tk.Tk()
-    FinestraModifica(root, voci, percorso_out, titolo)
+    FinestraModifica(root, voci, percorso_out, titolo, on_save=on_save)
     root.mainloop()
 
 
@@ -386,17 +403,21 @@ def test_finestra_forza_minuscolo_e_salva(tmp_path):
         f.righe[0]["vars"]["nome"].set("PERE Abate")          # l'utente scrive maiuscole
         assert f.righe[0]["vars"]["nome"].get() == "pere abate"
         f.righe[0]["vars"]["qta"].set("0,5")
-        assert f.salva() is True
-        assert out.read_text() == "pere abate;0.5;kg;1\n"
-        assert f.stato.get() == f.stato.get().lower()
 
+        # Test validazione fallita prima del salvataggio definitivo
         f.aggiungi_riga(Voce("riso", "boh"))                   # dato non valido: non salva
         assert f.salva() is False
         assert "invalid quantity" in f.stato.get()
         f.rimuovi_riga(f.righe[-1])
+
         assert f.salva() is True
+        assert out.read_text() == "pere abate;0.5;kg;1\n"
+        assert f.stato.get() == f.stato.get().lower()
     finally:
-        root.destroy()
+        try:
+            root.destroy()
+        except Exception:
+            pass
 
 
 def test_finestra_senza_articoli_ha_una_riga_vuota(tmp_path):
@@ -406,7 +427,45 @@ def test_finestra_senza_articoli_ha_una_riga_vuota(tmp_path):
         assert len(f.righe) == 1
         assert f.salva() is True and (tmp_path / "out.txt").read_text() == ""
     finally:
-        root.destroy()
+        try:
+            root.destroy()
+        except Exception:
+            pass
+
+
+def test_finestra_on_save_callback_e_chiusura(tmp_path):
+    root = _root_o_skip()
+    chiamate = []
+    try:
+        out = tmp_path / "out.txt"
+        voci = [Voce("latte", "1,5", "l", "2")]
+        f = FinestraModifica(root, voci, out, "test", on_save=lambda items: chiamate.append(items))
+
+        # on_save is NOT called if validation fails
+        f.aggiungi_riga(Voce("pane", "non-valido"))
+        assert f.salva() is False
+        assert len(chiamate) == 0
+        try:
+            ancora_viva = bool(root.winfo_exists())
+        except Exception:
+            ancora_viva = False
+        assert ancora_viva
+
+        # on_save receives list of items and window is destroyed on successful save
+        f.rimuovi_riga(f.righe[-1])
+        assert f.salva() is True
+        assert chiamate == [[("latte", 1.5, "l", 2)]]
+        assert out.read_text() == "latte;1.5;l;2\n"
+        try:
+            ancora_viva = bool(root.winfo_exists())
+        except Exception:
+            ancora_viva = False
+        assert not ancora_viva
+    finally:
+        try:
+            root.destroy()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

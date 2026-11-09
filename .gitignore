@@ -1,10 +1,14 @@
+.*
+!.gitignore
 __pycache__/
 *.pyc
 *.db
 .venv/
 setup_environment.log
 pantry_[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-9][0-9].txt
+out.txt
+#antigravity env
+.agents
 #claude env
 .claude
-/features_development/scontrini
-/features_development/output_letture
+/receipts_output

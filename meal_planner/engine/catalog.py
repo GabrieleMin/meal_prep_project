@@ -37,16 +37,34 @@ def group_members(conn, group_id: int) -> list:
         "SELECT ID FROM GROUP_MEMBERS WHERE Group_ID = ? ORDER BY ID", (group_id,))]
 
 
-def load_profile(conn) -> dict:
-    cur = conn.execute(
-        "SELECT Weight_kg, Height_cm, Age_years, Sex, Activity_Level, Goal, "
-        "Kcal_target, Kcal_tolerance_pct, Open_extra_pct, No_repeat_days, Target_weight_kg, "
-        "Weekly_rate_kg, Maintenance_manual, Use_manual_maintenance, Kcal_manual, Use_manual_kcal, "
-        "Default_servings FROM PROFILE WHERE ID = 1")
-    r = cur.fetchone()
-    if r is None:
-        raise RuntimeError("Profile missing: run meal_planner.db.recipe_schema first")
-    return dict(zip([d[0] for d in cur.description], r))
+def load_profile(conn=None, db_path: str = None) -> dict | None:
+    close_after = False
+    active_conn = None
+    import sqlite3
+    from pathlib import Path
+    if isinstance(conn, sqlite3.Connection):
+        active_conn = conn
+    elif conn is not None and not isinstance(conn, (str, bytes, Path)):
+        active_conn = conn
+    else:
+        from meal_planner.db.connection import get_connection
+        target = conn if isinstance(conn, (str, Path)) else db_path
+        active_conn = get_connection(target)
+        close_after = True
+
+    try:
+        cur = active_conn.execute(
+            "SELECT Weight_kg, Height_cm, Age_years, Sex, Activity_Level, Goal, "
+            "Kcal_target, Kcal_tolerance_pct, Open_extra_pct, No_repeat_days, Target_weight_kg, "
+            "Weekly_rate_kg, Maintenance_manual, Use_manual_maintenance, Kcal_manual, Use_manual_kcal, "
+            "Default_servings FROM PROFILE WHERE ID = 1")
+        r = cur.fetchone()
+        if r is None:
+            return None
+        return dict(zip([d[0] for d in cur.description], r))
+    finally:
+        if close_after:
+            active_conn.close()
 
 
 def load_goals(conn) -> list:

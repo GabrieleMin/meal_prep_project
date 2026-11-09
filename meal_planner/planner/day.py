@@ -3,6 +3,7 @@
 from datetime import date
 
 from meal_planner import engine as m
+from meal_planner.inventory import get_exclusion_list
 
 
 OPEN_WEIGHT, NEW_WEIGHT, SHARE_WEIGHT, EXTRA_PENALTY = 3.0, 1.0, 5.0, 1.0
@@ -16,8 +17,13 @@ LEFTOVER_SIM = {"detail": [], "open_coverage": 1.0, "new_packages": 0, "missing"
               "feasible": True, "incomplete_data": False, "group_choices": {}}
 
 
-def _score(coverage, new, share_deviation):
-    return OPEN_WEIGHT * coverage - NEW_WEIGHT * new - SHARE_WEIGHT * share_deviation
+try:
+    from meal_planner.engine._speedups import score as _c_score
+    def _score(coverage, new, share_deviation):
+        return _c_score(float(coverage), float(new), float(share_deviation))
+except (ImportError, AttributeError):
+    def _score(coverage, new, share_deviation):
+        return OPEN_WEIGHT * coverage - NEW_WEIGHT * new - SHARE_WEIGHT * share_deviation
 
 
 def _deviation(check):
@@ -31,9 +37,11 @@ def plan_day(conn, date_str, kcal=None, inv=None, fixed=None, planned_cooks=None
     `inv` (virtual inventory) lets you chain several days; it is not modified.
     `planned_cooks` = [(Recipe_ID, date)] already planned in memory: they count for repetitions."""
     products, goals, profile = m.load_products(conn), m.load_goals(conn), m.load_profile(conn)
+    if profile is None:
+        profile = {}
     if kcal:
         profile["Kcal_target"] = kcal
-    target = profile["Kcal_target"]
+    target = profile.get("Kcal_target")
     if not target:
         raise ValueError("Kcal target not defined: use --kcal or 'python -m meal_planner.engine profile ...'.")
     meals = conn.execute("SELECT Name, Energy_Share_pct FROM MEALS ORDER BY Sort_Order").fetchall()
@@ -45,8 +53,40 @@ def plan_day(conn, date_str, kcal=None, inv=None, fixed=None, planned_cooks=None
     open_before = {i for i in inv.rows if inv.open_remainder(i) > 0}
     warnings = []
 
+    # Build exclusion set: IDs of ingredients expired by this date
+    excluded_ids = {r["ID"] for r in get_exclusion_list(target_date=date_str, conn=conn)}
+
+    # Build expiry map: {product_id: nearest_days_to_expiry} for non-excluded items
+    today_d = date.fromisoformat(date_str)
+    _expiry_rows = conn.execute(
+        "SELECT ID, MIN(Expiration_Date) FROM INVENTORY "
+        "WHERE Expiration_Date IS NOT NULL GROUP BY ID"
+    ).fetchall()
+    _expiry_days = {}
+    for pid, exp_str in _expiry_rows:
+        if pid in excluded_ids:
+            continue
+        try:
+            days = (date.fromisoformat(exp_str) - today_d).days
+            if days > 0:
+                _expiry_days[pid] = days
+        except ValueError:
+            pass
+
+    _macro_cache = {}
+
+    def _get_macros(rid, choices):
+        if not rid:
+            return None
+        ckey = (rid, tuple(sorted(choices.items())) if choices else ())
+        mac = _macro_cache.get(ckey)
+        if mac is None:
+            mac = m.recipe_macros(conn, rid, products, choices, ingredients=ing[rid])
+            _macro_cache[ckey] = mac
+        return dict(mac)
+
     def entry(meal, rid, sim, origin, cooking_id=None):
-        mac = m.recipe_macros(conn, rid, products, sim["group_choices"], ingredients=ing[rid]) if rid else None
+        mac = _get_macros(rid, sim["group_choices"]) if rid else None
         return {"meal": meal, "Recipe_ID": rid, "recipe": recipe_names.get(rid), "origin": origin,
                 "sim": sim, "macro": mac, "Cooking_ID": cooking_id, "leftover": bool(cooking_id) and origin == "planned"}
 
@@ -89,10 +129,20 @@ def plan_day(conn, date_str, kcal=None, inv=None, fixed=None, planned_cooks=None
 
     def preselection(rid, cooking_id, meal):
         sim = LEFTOVER_SIM if cooking_id else m.simulate_recipe(conn, inv.copy(), rid, products, ingredients=ing[rid])
-        recipe_kcal = m.recipe_macros(conn, rid, products, sim["group_choices"], ingredients=ing[rid])["Kcal"]
+        recipe_kcal = _get_macros(rid, sim["group_choices"])["Kcal"]
         deviation = abs(recipe_kcal / target - shares[meal])
-        return (len(sim["missing"]) + sim["incomplete_data"],
-                -_score(sim["open_coverage"], sim["new_packages"], deviation))
+        # Penalize recipes that use excluded (expired by target date) ingredients
+        recipe_ing_ids = {i["ID"] for i in (ing.get(rid) or []) if i.get("ID") is not None}
+        uses_excluded = bool(recipe_ing_ids & excluded_ids)
+        # Expiring priority: prefer recipes using soon-to-expire (but not yet excluded) ingredients
+        min_days = None
+        for ing_id in recipe_ing_ids:
+            d = _expiry_days.get(ing_id)
+            if d is not None and (min_days is None or d < min_days):
+                min_days = d
+        expiry_bonus = (1.0 / min_days) if min_days else 0.0
+        return (len(sim["missing"]) + sim["incomplete_data"] + (1000 if uses_excluded else 0),
+                -_score(sim["open_coverage"], sim["new_packages"], deviation) - expiry_bonus)
 
     free, cands = [], {}
     for meal, _ in meals:

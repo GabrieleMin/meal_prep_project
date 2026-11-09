@@ -1,5 +1,5 @@
 """
-recepiet_reader.py - Lettura scontrini da immagine, 100% locale e gratuito (EasyOCR + OpenCV).
+meal_planner.receipts.reader - Lettura scontrini da immagine, 100% locale e gratuito (EasyOCR + OpenCV).
 
 Novità rispetto alla versione precedente
 -----------------------------------------

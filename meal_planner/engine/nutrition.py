@@ -70,8 +70,13 @@ def recipe_macros(conn, recipe_id: int, products: dict = None, choices: dict = N
     return tot
 
 
-def sum_macros(items: list) -> dict:
-    return {m: sum(x[m] for x in items) for m in MACROS}
+try:
+    from meal_planner.engine._speedups import sum_macros as _c_sum_macros
+    def sum_macros(items: list) -> dict:
+        return _c_sum_macros(items)
+except (ImportError, AttributeError):
+    def sum_macros(items: list) -> dict:
+        return {m: sum(x[m] for x in items) for m in MACROS}
 
 
 def _convert(kind, nutrient, value, kcal, weight_kg):

@@ -37,21 +37,85 @@ def estimates(p):
     return calc, target, (p["Kcal_manual"] if p["Use_manual_kcal"] else target)
 
 
-def update_profile(conn, values):
+def reset_profile(conn=None, db_path=None) -> bool:
+    """Hard-deletes all rows from PROFILE and WEIGHT_LOG."""
+    manage_conn = False
+    active_conn = None
+    import sqlite3
+    from pathlib import Path
+    if isinstance(conn, sqlite3.Connection):
+        active_conn = conn
+    elif conn is not None and not isinstance(conn, (str, bytes, Path)):
+        active_conn = conn
+    else:
+        from meal_planner.db.connection import get_connection
+        target = conn if isinstance(conn, (str, Path)) else db_path
+        active_conn = get_connection(target)
+        manage_conn = True
+
+    try:
+        active_conn.execute("DELETE FROM PROFILE")
+        active_conn.execute("DELETE FROM WEIGHT_LOG")
+        active_conn.commit()
+        return True
+    except Exception:
+        if manage_conn:
+            active_conn.rollback()
+        raise
+    finally:
+        if manage_conn:
+            active_conn.close()
+
+
+def update_profile(conn=None, values=None, db_path=None):
     """Saves the whole profile form and logs today's measurements; returns the target in use."""
+    if values is None and isinstance(conn, dict):
+        values = conn
+        conn = None
     v = dict(values)
-    log = (v.pop("Body_fat_pct"), v.pop("Waist_cm"))
-    if (v["Use_manual_maintenance"] and v["Maintenance_manual"] is None) or \
-            (v["Use_manual_kcal"] and v["Kcal_manual"] is None):
+    log = (v.pop("Body_fat_pct", None), v.pop("Waist_cm", None))
+    if (v.get("Use_manual_maintenance") and v.get("Maintenance_manual") is None) or \
+            (v.get("Use_manual_kcal") and v.get("Kcal_manual") is None):
         raise ValueError("Enter the manual value or untick 'Use manual'.")
     v["Kcal_target"] = estimates(v)[2]
     if v["Kcal_target"] is None:
         raise ValueError("For weight_loss or weight_gain set the weekly rate (or a manual kcal/day).")
-    conn.execute("UPDATE PROFILE SET " + ", ".join(f"{k} = ?" for k in v) + " WHERE ID = 1", list(v.values()))
-    conn.execute("INSERT OR REPLACE INTO WEIGHT_LOG (Date, Weight_kg, Body_fat_pct, Waist_cm) "
-                 "VALUES (date('now', 'localtime'), ?, ?, ?)", (v["Weight_kg"], *log))
-    conn.commit()
-    return v["Kcal_target"]
+
+    manage_conn = False
+    active_conn = None
+    import sqlite3
+    from pathlib import Path
+    if isinstance(conn, sqlite3.Connection):
+        active_conn = conn
+    elif conn is not None and not isinstance(conn, (str, bytes, Path)):
+        active_conn = conn
+    else:
+        from meal_planner.db.connection import get_connection
+        target = conn if isinstance(conn, (str, Path)) else db_path
+        active_conn = get_connection(target)
+        manage_conn = True
+
+    try:
+        row = active_conn.execute("SELECT 1 FROM PROFILE WHERE ID = 1").fetchone()
+        if row is not None:
+            active_conn.execute("UPDATE PROFILE SET " + ", ".join(f"{k} = ?" for k in v) + " WHERE ID = 1", list(v.values()))
+        else:
+            v["ID"] = 1
+            cols = list(v.keys())
+            active_conn.execute("INSERT INTO PROFILE (" + ", ".join(cols) + ") VALUES (" + ", ".join("?" for _ in cols) + ")", list(v.values()))
+
+        if v.get("Weight_kg") is not None:
+            active_conn.execute("INSERT OR REPLACE INTO WEIGHT_LOG (Date, Weight_kg, Body_fat_pct, Waist_cm) "
+                                "VALUES (date('now', 'localtime'), ?, ?, ?)", (v["Weight_kg"], *log))
+        active_conn.commit()
+        return v["Kcal_target"]
+    except Exception:
+        if manage_conn:
+            active_conn.rollback()
+        raise
+    finally:
+        if manage_conn:
+            active_conn.close()
 
 
 def set_meal_shares(conn, shares):

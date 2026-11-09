@@ -21,7 +21,7 @@ import argparse
 import sys
 
 from meal_planner.db.connection import get_connection, DB_PATH
-from meal_planner.db.recipe_schema import migrate
+from meal_planner.db.schema import migrate
 
 # Name (as in ALIASES) -> (Grams_per_piece, Density_kg_per_L)
 CONVERSIONS = {

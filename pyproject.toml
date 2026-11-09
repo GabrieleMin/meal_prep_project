@@ -9,8 +9,18 @@ description = "Pantry inventory, recipes and nutrition-aware meal planning (desk
 requires-python = ">=3.10"
 dependencies = ["sv-ttk"]  # light/dark theme for the GUI (Tkinter and SQLite are included with Python)
 
+[project.optional-dependencies]
+receipts = ["tkinterdnd2"]
+
 [project.gui-scripts]
 meal-planner = "meal_planner.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["meal_planner*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [
+    ".",
+    ".venv/lib/python3.12/site-packages",
+]

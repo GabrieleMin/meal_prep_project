@@ -7,4 +7,5 @@ rapidfuzz==3.14.6
 sv-ttk==2.6.1
 torch==2.9.1
 opencv-python
+tkinterdnd2
 scripts

@@ -19,7 +19,14 @@ sys.path.insert(0, ROOT)
 
 from meal_planner.db.connection import DB_PATH  # noqa: E402
 
-TEST_MODULES = ("tests.test_inventory", "tests.test_engine", "tests.test_planner", "tests.test_recipes")
+TEST_MODULES = (
+    "tests.test_domain_core",
+    "tests.test_receipts_and_reconciliation",
+    "tests.test_inventory_management",
+    "tests.test_recipe_management",
+    "tests.test_settings_and_profile",
+    "tests.test_e2e_and_invariants",
+)
 
 
 def run(module, *args, env=None):
@@ -73,8 +80,8 @@ def run_tests():
         r = subprocess.run([sys.executable, "-m", module], cwd=ROOT, env=env, capture_output=True,
                            text=True, encoding="utf-8", errors="replace")
         out = r.stdout + r.stderr
-        ok = r.returncode == 0 and "Traceback" not in out and "ERROR" not in out
-        summary = [line for line in out.splitlines() if "tests passed" in line]
+        ok = r.returncode == 0 and "Traceback" not in out and "FAILED (" not in out and "ERROR:" not in out
+        summary = [line for line in out.splitlines() if "tests passed" in line or line.startswith("Ran ")]
         print(f"{module}: {summary[-1] if summary else 'completed'} | {'ok' if ok else 'FAILED'}")
         if not ok:
             print(out[-3000:])
@@ -108,8 +115,7 @@ def main() -> int:
         print("\n" + ("Setup stopped because of an error." if failed else f"Project ready. Database: {DB_PATH}"))
         return 1 if failed else 0
 
-    if not (step("Base schema", run("meal_planner.db.schema")) and
-            step("Recipe schema", run("meal_planner.db.recipe_schema"))):
+    if not step("Database schema", run("meal_planner.db.schema")):
         return finish()
     existing = count("PRODUCTS")
     if args.reset:

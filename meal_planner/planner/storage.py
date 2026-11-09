@@ -52,6 +52,24 @@ def save_plan(conn, plan, update_shopping=True):
     if update_shopping:
         update_plan_shopping_list(conn)
 
+def schedule_meal_prep(conn, recipe_id: int, cook_date: str, target_dates: list) -> int:
+    """
+    Schedules a meal prep cooking: cook on `cook_date` for one or more `target_dates`.
+    Creates a COOKINGS row with Total_Servings = len(target_dates) and Status='planned',
+    then inserts PLAN rows for each target date.
+    Returns the new Cooking_ID.
+    """
+    servings = len(target_dates)
+    if servings < 1:
+        raise ValueError("At least one target date is required.")
+    cooking_id = conn.execute(
+        "INSERT INTO COOKINGS (Recipe_ID, Cooking_Date, Total_Servings, Remaining_Servings, Status) "
+        "VALUES (?, ?, ?, ?, 'planned')",
+        (recipe_id, cook_date, servings, servings)
+    ).lastrowid
+    conn.commit()
+    return cooking_id
+
 
 def mark_cooked(conn, date_str, meal, servings=1):
     """Marks the meal as consumed. If the recipe has to be cooked it consumes the ingredients (x `servings`)
