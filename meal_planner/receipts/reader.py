@@ -376,8 +376,11 @@ def parsa_righe(righe: Sequence[Riga], profilo: Profilo = PROFILO_DEFAULT) -> Li
 # =====================================================================
 # CATALOGO PRODOTTI (apprendimento locale, gratuito)
 # =====================================================================
+P_NORM_NOME = re.compile(r'[^A-Z0-9 ]')
+
+
 def _norm_nome(s: str) -> str:
-    return re.sub(r'[^A-Z0-9 ]', '', s.upper()).strip()
+    return P_NORM_NOME.sub('', s.upper()).strip()
 
 
 def carica_catalogo(percorso: Optional[str]) -> List[str]:
@@ -396,11 +399,15 @@ def aggiungi_al_catalogo(percorso: str, nomi: Iterable[str]) -> int:
     return len(nuovi)
 
 
-def correggi_con_catalogo(nome: str, catalogo: Sequence[str], soglia: float = 88.0) -> str:
+def correggi_con_catalogo(nome: str, catalogo: Sequence[str | tuple[str, str]], soglia: float = 88.0) -> str:
     n = _norm_nome(nome)
     migliore, p_max = nome, soglia
-    for voce in catalogo:
-        s = similarita(n, _norm_nome(voce))
+    for entry in catalogo:
+        if isinstance(entry, tuple):
+            voce, norm_voce = entry
+        else:
+            voce, norm_voce = entry, _norm_nome(entry)
+        s = similarita(n, norm_voce)
         if s >= p_max:
             migliore, p_max = voce, s
     return migliore
@@ -485,8 +492,9 @@ def _leggi_da_base(percorso: str, base: Optional[np.ndarray], profilo: Profilo,
 
     if catalogo:
         with _fase(tempi, "catalogo"):
+            norm_catalogo = [(voce, _norm_nome(voce)) for voce in catalogo]
             for a in migliore.articoli:
-                a.nome = correggi_con_catalogo(a.nome, catalogo, profilo.soglia_catalogo)
+                a.nome = correggi_con_catalogo(a.nome, norm_catalogo, profilo.soglia_catalogo)
 
     if debug_dir:
         with _fase(tempi, "salvataggio_debug"):

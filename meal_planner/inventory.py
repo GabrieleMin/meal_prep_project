@@ -626,7 +626,7 @@ def consume_quantity(name: str, quantity_to_consume: float, db_path: str = None)
                     remaining_to_consume -= withdrawal
         else:
             # Phase 1: consume from the already-open remainders first
-            for row_id, unit_weight, item_count, remainder_weight in rows:
+            for idx, (row_id, unit_weight, item_count, remainder_weight) in enumerate(rows):
                 if remaining_to_consume <= 0:
                     break
                 if remainder_weight > 0:
@@ -638,10 +638,7 @@ def consume_quantity(name: str, quantity_to_consume: float, db_path: str = None)
                     )
                     remaining_to_consume -= withdrawal
                     # update the local value for phase 2, in case it needs re-reading
-                    rows = [
-                        (r[0], r[1], r[2], new_remainder) if r[0] == row_id else r
-                        for r in rows
-                    ]
+                    rows[idx] = (row_id, unit_weight, item_count, new_remainder)
 
             # Phase 2: open new intact units, FIFO, as long as needed
             if remaining_to_consume > 0:
@@ -979,23 +976,16 @@ def get_catalog_for_reconciliation(
         cur = conn.cursor()
 
         # 1. Fetch canonical names (earliest alias by rowid for each product ID)
-        cur.execute("""
-            SELECT a.ID, a.Name
-            FROM ALIASES a
-            WHERE a.rowid = (SELECT MIN(a2.rowid) FROM ALIASES a2 WHERE a2.ID = a.ID)
-        """)
-        canonical_names = {row[0]: row[1] for row in cur.fetchall()}
+        cur.execute("SELECT ID, Name FROM ALIASES ORDER BY rowid ASC")
+        canonical_names = {}
+        for pid, name in cur.fetchall():
+            canonical_names.setdefault(pid, name)
 
         # 2. Fetch all products
-        cur.execute("PRAGMA table_info(PRODUCTS)")
-        cols = {row[1] for row in cur.fetchall()}
-        piece_col = "Grams_per_piece" if "Grams_per_piece" in cols else "NULL AS Grams_per_piece"
-        density_col = "Density_kg_per_L" if "Density_kg_per_L" in cols else "NULL AS Density_kg_per_L"
-
-        cur.execute(f"""
+        cur.execute("""
             SELECT ID, Unit, Kcal_100g, Protein_100g, Carbs_100g, Fat_100g,
                    Sugars_100g, Saturated_fat_100g, Fiber_100g, Salt_100g,
-                   {piece_col}, {density_col}
+                   Grams_per_piece, Density_kg_per_L
             FROM PRODUCTS
             ORDER BY ID ASC
         """)

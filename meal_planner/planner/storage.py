@@ -12,8 +12,19 @@ def _apply_plan(conn, inv, products, before=None):
         "SELECT c.Recipe_ID FROM PLAN p JOIN COOKINGS c USING (Cooking_ID) "
         "WHERE p.Status IN ('proposed', 'confirmed') AND c.Status = 'planned' AND (? IS NULL OR p.Date < ?) "
         "ORDER BY p.Date, (SELECT Sort_Order FROM MEALS WHERE Name = p.Meal)", (before, before)).fetchall()
+    recipe_ids = {rid for (rid,) in entries if rid is not None}
+    ing_map = {rid: [] for rid in recipe_ids}
+    if recipe_ids:
+        placeholders = ",".join("?" * len(recipe_ids))
+        for r in conn.execute(
+            f"SELECT Recipe_ID, ID, Group_ID, Quantity, Unit, To_Taste "
+            f"FROM RECIPE_INGREDIENTS WHERE Recipe_ID IN ({placeholders}) "
+            f"ORDER BY Recipe_ID, Row_ID", list(recipe_ids)
+        ):
+            if r[0] in ing_map:
+                ing_map[r[0]].append({"ID": r[1], "Group_ID": r[2], "Quantity": r[3], "Unit": r[4], "To_Taste": r[5]})
     for (rid,) in entries:
-        for i, q in m.simulate_recipe(conn, inv, rid, products)["missing"].items():
+        for i, q in m.simulate_recipe(conn, inv, rid, products, ingredients=ing_map.get(rid))["missing"].items():
             missing[i] = missing.get(i, 0.0) + q
     return missing
 

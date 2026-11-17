@@ -131,7 +131,7 @@ from meal_planner import recipes as rc
 from meal_planner.db.connection import get_connection
 from meal_planner.db.schema import migrate
 from meal_planner.gui.app import App
-from meal_planner.gui.dialogs import AddRecipeDialog, QuickProductDialog, _MealDict
+from meal_planner.gui.dialogs import AddRecipeDialog, QuickProductDialog, _MealDict, RecipeDetailsDialog
 from scripts.seed_inventory import seed
 
 
@@ -556,6 +556,22 @@ class TestAppRecipeIntegration(BaseRecipeFlowTestCase):
         dlg.cancel()
         app.destroy()
 
+    def test_app_open_dialogs_without_explicit_db_path(self):
+        """Ensure opening AddRecipeDialog and RecipeDetailsDialog without explicit app.db_path does not raise NameError."""
+        app = App()
+        app.withdraw()
+        dlg = app.open_add_recipe_dialog(wait=False)
+        self.assertIsInstance(dlg, AddRecipeDialog)
+        dlg.destroy()
+
+        if app.t_ric.tv.get_children():
+            app.t_ric.tv.selection_set(app.t_ric.tv.get_children()[0])
+            details = app.open_recipe_details(wait=False)
+            self.assertIsInstance(details, RecipeDetailsDialog)
+            details.destroy()
+
+        app.destroy()
+
     def test_app_save_recipe_updates_status_and_table(self):
         app = App()
         app.withdraw()
@@ -577,6 +593,36 @@ class TestAppRecipeIntegration(BaseRecipeFlowTestCase):
         recipe_names = [app.t_ric.tv.item(iid, "values")[0] for iid in app.t_ric.tv.get_children()]
         self.assertIn("Ricetta da App GUI", recipe_names)
 
+        # Test opening recipe details dialog
+        app.t_ric.tv.selection_set(app.t_ric.tv.get_children()[0])
+        details_dlg = app.open_recipe_details(wait=False)
+        self.assertIsInstance(details_dlg, RecipeDetailsDialog)
+        self.assertTrue("Recipe Details" in details_dlg.title() or "Dettagli Ricetta" in details_dlg.title())
+        details_dlg.destroy()
+
+        app.destroy()
+
+    def test_add_recipe_dialog_keyboard_shortcuts_and_refocus(self):
+        app = App()
+        app.withdraw()
+        app.db_path = self.db_path
+        app.refresh()
+
+        dlg = app.open_add_recipe_dialog(wait=False)
+        self.assertTrue(hasattr(dlg, "_set_initial_focus"))
+        dlg.v_name.set("Keyboard Test Recipe")
+        dlg.v_meals["lunch"].set(True)
+
+        # Add ingredient and verify inputs cleared
+        dlg.v_ingredient_name.set("Rice")
+        dlg.v_quantity.set("150")
+        self.assertTrue(dlg.add_ingredient())
+        self.assertEqual(dlg.v_ingredient_name.get(), "")
+        self.assertEqual(dlg.v_quantity.get(), "")
+        self.assertEqual(len(dlg.ingredients), 1)
+
+        # Save and verify
+        self.assertTrue(dlg._on_save())
         app.destroy()
 
 
@@ -659,7 +705,7 @@ from unittest.mock import patch
 from meal_planner import recipes as rc
 from meal_planner.db.connection import get_connection
 from meal_planner.db.schema import migrate
-from meal_planner.gui.dialogs import AddRecipeDialog, QuickProductDialog, _MealDict
+from meal_planner.gui.dialogs import AddRecipeDialog, QuickProductDialog, _MealDict, RecipeDetailsDialog
 from scripts.seed_inventory import seed
 
 
@@ -1323,8 +1369,8 @@ class TestProductionDatabaseInvariant(unittest.TestCase):
     """Verify production database invariant on disk."""
 
     def test_production_db_row_counts(self):
-        db_path = "inventory.db"
-        self.assertTrue(os.path.exists(db_path), "Production inventory.db file does not exist")
+        db_path = "data/inventory.db"
+        self.assertTrue(os.path.exists(db_path), "Production data/inventory.db file does not exist")
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('PRODUCTS', 'ALIASES', 'INVENTORY', 'RECIPES') ORDER BY name")
@@ -2082,6 +2128,169 @@ class TestRecipeManagementAdvancedEdgeCases(unittest.TestCase):
         self.assertIsInstance(pid, int)
         self.assertGreater(pid, 0)
         conn.close()
+
+    def test_dialog_lifecycle_centering_and_focus(self):
+        """Verifies AddRecipeDialog and RecipeDetailsDialog center, lift, focus, and destroy cleanly without timer errors."""
+        conn = get_connection(self.db_path)
+        rc.register_product_on_the_fly(conn, "Pollo Test", "g", {"Kcal_100g": 150, "Protein_100g": 30, "Carbs_100g": 0, "Fat_100g": 3})
+        rc.create_recipe(conn, "Lifecycle Recipe", ["lunch"], [("Pollo Test", 150, "g")])
+        conn.close()
+
+        app = App()
+        app.withdraw()
+        app.db_path = self.db_path
+        app.refresh()
+
+        # AddRecipeDialog lifecycle
+        add_dlg = app.open_add_recipe_dialog(wait=False)
+        self.assertIsInstance(add_dlg, AddRecipeDialog)
+        self.assertTrue(add_dlg.winfo_exists())
+        self.assertIn("Recipe", add_dlg.title())
+        add_dlg.destroy()
+        self.assertFalse(add_dlg.winfo_exists())
+
+        # RecipeDetailsDialog lifecycle
+        details_dlg = app.open_recipe_details(recipe_name="Lifecycle Recipe", wait=False)
+        self.assertIsInstance(details_dlg, RecipeDetailsDialog)
+        self.assertTrue(details_dlg.winfo_exists())
+        self.assertIn("Recipe Details", details_dlg.title())
+        details_dlg.destroy()
+        self.assertFalse(details_dlg.winfo_exists())
+
+        app.destroy()
+
+    def test_recipe_to_taste_qb_clarification_in_dialogs(self):
+        """Verifies To taste (q.b.) labels, table headings, and explanations in both dialogs."""
+        conn = get_connection(self.db_path)
+        rc.register_product_on_the_fly(conn, "Sale Test", "g", {"Kcal_100g": 0, "Protein_100g": 0, "Carbs_100g": 0, "Fat_100g": 0})
+        rc.create_recipe(conn, "Q.b. Recipe", ["lunch"], [("Sale Test", 1, "g", 1)])
+        conn.close()
+
+        app = App()
+        app.withdraw()
+        app.db_path = self.db_path
+        app.refresh()
+
+        # AddRecipeDialog checks
+        add_dlg = app.open_add_recipe_dialog(wait=False)
+        chk_text = add_dlg.chk_to_taste.cget("text")
+        self.assertTrue("taste" in chk_text.lower() and "q.b." in chk_text.lower())
+        col_heading = add_dlg.t_ingredients.heading("to_taste", "text")
+        self.assertIn("taste", col_heading.lower())
+        add_dlg.destroy()
+
+        # RecipeDetailsDialog checks
+        details_dlg = app.open_recipe_details(recipe_name="Q.b. Recipe", wait=False)
+        found_note = False
+        for widget in details_dlg.winfo_children():
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Label):
+                    txt = child.cget("text")
+                    if "quanto basta" in txt.lower() or "to taste" in txt.lower():
+                        found_note = True
+                for grand in child.winfo_children():
+                    if isinstance(grand, ttk.Label):
+                        txt = grand.cget("text")
+                        if "quanto basta" in txt.lower() or "to taste" in txt.lower():
+                            found_note = True
+        self.assertTrue(found_note, "RecipeDetailsDialog must include an explanatory note about 'To taste (q.b.)'")
+        details_dlg.destroy()
+
+        app.destroy()
+
+    def test_open_recipe_details_auto_selects_first_row(self):
+        """When no row is selected in recipes table, open_recipe_details auto-selects the first row."""
+        conn = get_connection(self.db_path)
+        rc.register_product_on_the_fly(conn, "Riso Test", "g", {"Kcal_100g": 350, "Protein_100g": 10, "Carbs_100g": 70, "Fat_100g": 1})
+        rc.create_recipe(conn, "Auto Select Recipe", ["lunch"], [("Riso Test", 100, "g")])
+        conn.close()
+
+        app = App()
+        app.withdraw()
+        app.db_path = self.db_path
+        app.refresh()
+
+        self.assertGreater(len(app.t_ric.tv.get_children()), 0)
+        app.t_ric.tv.selection_remove(app.t_ric.tv.selection())
+        self.assertEqual(len(app.t_ric.tv.selection()), 0)
+
+        details_dlg = app.open_recipe_details(wait=False)
+        self.assertIsNotNone(details_dlg)
+        self.assertIsInstance(details_dlg, RecipeDetailsDialog)
+        self.assertGreater(len(app.t_ric.tv.selection()), 0, "First recipe row must be selected")
+        details_dlg.destroy()
+
+        # Also verify empty table shows info popup
+        app.t_ric.tv.delete(*app.t_ric.tv.get_children())
+        with patch("tkinter.messagebox.showinfo") as mock_info:
+            res = app.open_recipe_details(wait=False)
+            self.assertIsNone(res)
+            self.assertTrue(mock_info.called)
+
+        app.destroy()
+
+    def test_table_double_click_opens_details(self):
+        """Table row double click callback selects the row and opens details dialog."""
+        conn = get_connection(self.db_path)
+        rc.register_product_on_the_fly(conn, "Pasta Test", "g", {"Kcal_100g": 350, "Protein_100g": 10, "Carbs_100g": 70, "Fat_100g": 1})
+        rc.create_recipe(conn, "Double Click Recipe", ["dinner"], [("Pasta Test", 100, "g")])
+        conn.close()
+
+        app = App()
+        app.deiconify()
+        app.db_path = self.db_path
+        app.refresh()
+
+        # Switch to recipes tab and update geometry
+        app.nb.select(2)
+        app.update()
+
+        children = app.t_ric.tv.get_children()
+        self.assertGreater(len(children), 0)
+        target_row = children[0]
+        recipe_name = app.t_ric.tv.item(target_row, "values")[0]
+
+        # 1. Verify <Double-1> binding genuinely executes Table._handle_double_click
+        binding = app.t_ric.tv.bind("<Double-1>")
+        self.assertIn("_handle_double_click", binding)
+        self.assertNotIn("<lambda>", binding)
+
+        # 2. Verify double-clicking heading or empty space does NOT trigger details dialog
+        with patch.object(app, "open_recipe_details") as mock_open:
+            event_head = type("Event", (), {"x": 10, "y": 10})()
+            app.t_ric._handle_double_click(event_head)
+            self.assertFalse(mock_open.called, "Header double click should not trigger details dialog")
+
+            event_empty = type("Event", (), {"x": 10, "y": 800})()
+            app.t_ric._handle_double_click(event_empty)
+            self.assertFalse(mock_open.called, "Empty space double click should not trigger details dialog")
+
+        # 3. Simulate row double-click via _handle_double_click
+        bbox = app.t_ric.tv.bbox(target_row)
+        ev_x = (bbox[0] + 10) if bbox else 50
+        ev_y = (bbox[1] + 10) if bbox else 50
+
+        # Clear selection first
+        app.t_ric.tv.selection_remove(app.t_ric.tv.selection())
+        self.assertEqual(app.t_ric.tv.selection(), ())
+
+        event_row = type("Event", (), {"x": ev_x, "y": ev_y})()
+        with patch.object(app, "open_recipe_details", wraps=app.open_recipe_details) as spy_open:
+            app.t_ric._handle_double_click(event_row)
+            self.assertTrue(spy_open.called, "open_recipe_details should be invoked for row double click")
+            self.assertEqual(spy_open.call_args[1].get("recipe_name"), recipe_name)
+
+        # Verify row is selected
+        self.assertEqual(app.t_ric.tv.selection(), (target_row,))
+
+        # Verify RecipeDetailsDialog instance was created
+        from meal_planner.gui.dialogs import RecipeDetailsDialog
+        dialogs = [w for w in app.winfo_children() if isinstance(w, RecipeDetailsDialog)]
+        self.assertGreaterEqual(len(dialogs), 1, "RecipeDetailsDialog must be opened on double click")
+        for d in dialogs:
+            d.destroy()
+
+        app.destroy()
 
 
 if __name__ == "__main__":

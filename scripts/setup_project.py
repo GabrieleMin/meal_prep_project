@@ -26,6 +26,7 @@ TEST_MODULES = (
     "tests.test_recipe_management",
     "tests.test_settings_and_profile",
     "tests.test_e2e_and_invariants",
+    "tests.test_recipe_generator",
 )
 
 

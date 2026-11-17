@@ -459,22 +459,22 @@ class TestTier1FeatureCoverage(BaseE2ETestCase):
 
             # Search canvas or child widgets for the exact text
             found_text = False
-            exact_italian_text = "Ciao, aggiunti il tuo profilo per iniziare"
+            valid_overlay_texts = ("Hello, add your profile to get started", "Ciao, aggiunti il tuo profilo per iniziare")
 
             if isinstance(overlay, tk.Canvas):
                 for item in overlay.find_all():
                     if overlay.type(item) == "text":
-                        if exact_italian_text in overlay.itemcget(item, "text"):
+                        if any(vt in overlay.itemcget(item, "text") for vt in valid_overlay_texts):
                             found_text = True
                             break
             # Or inspect children
             if not found_text:
                 for child in overlay.winfo_children():
-                    if hasattr(child, "cget") and exact_italian_text in str(child.cget("text")):
+                    if hasattr(child, "cget") and any(vt in str(child.cget("text")) for vt in valid_overlay_texts):
                         found_text = True
                         break
 
-            self.assertTrue(found_text, f"Overlay must display exact text: '{exact_italian_text}'")
+            self.assertTrue(found_text, f"Overlay must display exact text in: {valid_overlay_texts}")
         finally:
             app.destroy()
 
@@ -1504,8 +1504,8 @@ class TestChallengerR4DatabasePreservation(unittest.TestCase):
     """Verify that existing inventory.db data is strictly preserved."""
 
     def test_main_inventory_database_counts(self):
-        main_db_path = "/home/gabriele/Desktop/meal_prep/meal_prep_project/inventory.db"
-        self.assertTrue(os.path.exists(main_db_path), "inventory.db must exist")
+        main_db_path = os.path.abspath("data/inventory.db")
+        self.assertTrue(os.path.exists(main_db_path), "data/inventory.db must exist")
 
         conn = sqlite3.connect(f"file:{main_db_path}?mode=ro", uri=True)
         cur = conn.cursor()
@@ -1572,7 +1572,7 @@ class BaseFiniteFloatAdversarialTestCase(unittest.TestCase):
         cls.root.withdraw()
 
         # Capture baseline inventory.db counts
-        cls.prod_db_path = os.path.abspath("inventory.db")
+        cls.prod_db_path = os.path.abspath("data/inventory.db")
         if os.path.exists(cls.prod_db_path):
             conn = sqlite3.connect(cls.prod_db_path)
             cur = conn.cursor()
@@ -3179,7 +3179,7 @@ class TestDialogsWhiteBoxAdversarial(Tier5BaseTestCase):
         # 3. Check macro summary label text contains non-zero calories
         dlg._update_macro_summary()
         summary_text = dlg.lbl_macro_summary.cget("text")
-        self.assertIn("Totale per porzione", summary_text)
+        self.assertTrue("Total per serving" in summary_text or "Totale per porzione" in summary_text)
         self.assertIn("kcal", summary_text)
 
         # 4. Remove ingredient by index
@@ -3273,9 +3273,9 @@ class TestProfileOverlayAndSettingsAdversarial(Tier5BaseTestCase):
             c = app.profile_overlay
             self.assertIsInstance(c, tk.Canvas)
 
-            exact_italian = "Ciao, aggiunti il tuo profilo per iniziare"
+            valid_titles = ("Hello, add your profile to get started", "Ciao, aggiunti il tuo profilo per iniziare")
             texts = [c.itemcget(it, "text") for it in c.find_all() if c.type(it) == "text"]
-            self.assertIn(exact_italian, texts, f"Verbatim string '{exact_italian}' not found on canvas: {texts}")
+            self.assertTrue(any(vt in texts for vt in valid_titles), f"Verbatim string not found on canvas: {texts}")
 
             # Verify card polygon
             polygons = [it for it in c.find_all() if c.type(it) == "polygon"]
@@ -3285,7 +3285,7 @@ class TestProfileOverlayAndSettingsAdversarial(Tier5BaseTestCase):
 
             # Verify button window
             windows = [it for it in c.find_all() if c.type(it) == "window"]
-            self.assertGreater(len(windows), 0, "Overlay must contain an 'Aggiungi profilo' button")
+            self.assertGreater(len(windows), 0, "Overlay must contain an 'Add Profile' button")
         finally:
             app.destroy()
 
@@ -3316,9 +3316,9 @@ class TestProfileOverlayAndSettingsAdversarial(Tier5BaseTestCase):
                     app.update_idletasks()
 
                 # Verify canvas items are redrawn without accumulation
-                exact_italian = "Ciao, aggiunti il tuo profilo per iniziare"
+                valid_titles = ("Hello, add your profile to get started", "Ciao, aggiunti il tuo profilo per iniziare")
                 texts = [c.itemcget(it, "text") for it in c.find_all() if c.type(it) == "text"]
-                self.assertEqual(texts.count(exact_italian), 1,
+                self.assertEqual(sum(texts.count(vt) for vt in valid_titles), 1,
                                  f"Failed idempotence for geometry ({w}, {h})")
         finally:
             app.destroy()
@@ -3453,9 +3453,9 @@ class TestDatabaseConcurrencyAndProductionInvariant(Tier5BaseTestCase):
         conn.close()
 
     def test_production_database_row_counts_strict_preservation(self):
-        """Strictly enforce that production inventory.db on disk is untouched."""
-        prod_db_path = "inventory.db"
-        self.assertTrue(os.path.exists(prod_db_path), "Production inventory.db file must exist")
+        """Strictly enforce that production data/inventory.db on disk is untouched."""
+        prod_db_path = "data/inventory.db"
+        self.assertTrue(os.path.exists(prod_db_path), "Production data/inventory.db file must exist")
         conn = sqlite3.connect(prod_db_path)
         cur = conn.cursor()
 

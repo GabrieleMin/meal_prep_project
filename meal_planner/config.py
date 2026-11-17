@@ -10,6 +10,18 @@ If a custom CONFIG_PATH is specified (such as by unit test fixtures), JSON file 
 from pathlib import Path
 import json
 import os
+import threading
+
+_CONFIG_LOCK = threading.Lock()
+_CACHED_CONFIG = None
+_CACHED_DB_PATH = None
+
+
+def _invalidate_cache() -> None:
+    global _CACHED_CONFIG, _CACHED_DB_PATH
+    with _CONFIG_LOCK:
+        _CACHED_CONFIG = None
+        _CACHED_DB_PATH = None
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.json"
 CONFIG_PATH = Path(os.environ.get("MEAL_PLANNER_CONFIG") or DEFAULT_CONFIG_PATH)
@@ -137,14 +149,22 @@ def save_config(updates: dict) -> None:
         current.update(updates)
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(json.dumps(current, indent=2), encoding="utf-8")
+        _invalidate_cache()
         return
 
     _save_to_db(updates)
+    _invalidate_cache()
 
 
 def get(key: str, default=None):
     """Retrieves a configuration value."""
-    cfg = load_config()
+    global _CACHED_CONFIG, _CACHED_DB_PATH
+    current_db = os.environ.get("MEAL_PLANNER_DB")
+    with _CONFIG_LOCK:
+        if _CACHED_CONFIG is None or _CACHED_DB_PATH != current_db:
+            _CACHED_CONFIG = load_config()
+            _CACHED_DB_PATH = current_db
+        cfg = _CACHED_CONFIG
     val = cfg.get(key)
     if val is not None:
         return val

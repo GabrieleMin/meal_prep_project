@@ -7,21 +7,42 @@ import tkinter as tk
 from meal_planner.gui.support import RED
 
 
-def create_delete_icon(master=None, size=20, bg_color="#fef2f2", border_color="#991b1b", cross_color="#7f1d1d"):
+def create_delete_icon(
+    master=None,
+    size=20,
+    bg_color="#fbebec",
+    border_color="#f0b8bd",
+    cross_color="#c94a53",
+    scale=4,
+):
     """
-    Renders a PhotoImage styled as a dark red cross surrounded by a rounded square.
+    Renders an anti-aliased PhotoImage styled as a soft modern cross inside a rounded badge.
     """
     try:
         from PIL import Image, ImageDraw, ImageTk
-        im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        s = size * scale
+        pad = int(5.5 * scale)
+        r = 4 * scale
+        border_w = scale
+        cross_w = max(1, round(1.6 * scale))
+
+        im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
         d = ImageDraw.Draw(im)
         # Rounded square outline & fill
-        d.rounded_rectangle((1, 1, size - 2, size - 2), radius=4, fill=bg_color, outline=border_color, width=1)
-        # Dark red cross
-        pad = 5
-        d.line([(pad, pad), (size - 1 - pad, size - 1 - pad)], fill=cross_color, width=2)
-        d.line([(pad, size - 1 - pad), (size - 1 - pad, pad)], fill=cross_color, width=2)
-        return ImageTk.PhotoImage(im, master=master)
+        d.rounded_rectangle(
+            (border_w, border_w, s - border_w - 1, s - border_w - 1),
+            radius=r,
+            fill=bg_color,
+            outline=border_color,
+            width=border_w,
+        )
+        # Soft cross lines
+        d.line([(pad, pad), (s - 1 - pad, s - 1 - pad)], fill=cross_color, width=cross_w)
+        d.line([(pad, s - 1 - pad), (s - 1 - pad, pad)], fill=cross_color, width=cross_w)
+
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        im_resized = im.resize((size, size), resample) if scale > 1 else im
+        return ImageTk.PhotoImage(im_resized, master=master)
     except Exception:
         return None
 
@@ -36,6 +57,7 @@ class Table(ttk.Frame):
         on_delete=None,
         on_select=None,
         on_double_click=None,
+        is_dark=None,
     ):
         super().__init__(master)
         self.show_delete = show_delete
@@ -43,6 +65,7 @@ class Table(ttk.Frame):
         self.on_select = on_select
         self.on_double_click = on_double_click
         self._delete_icon = None
+        self._is_dark = is_dark
 
         col_keys = [c for c, _, _ in columns]
         show_mode = ("tree", "headings") if show_delete else "headings"
@@ -51,7 +74,7 @@ class Table(ttk.Frame):
         if show_delete:
             self.tv.heading("#0", text="")
             self.tv.column("#0", width=42, minwidth=36, stretch=False, anchor="center")
-            self.update_delete_icon()
+            self.update_delete_icon(is_dark=is_dark)
             self.tv.bind("<ButtonRelease-1>", self._handle_click)
             self.tv.bind("<Double-1>", self._handle_double_click)
         elif on_select or on_double_click:
@@ -71,28 +94,53 @@ class Table(ttk.Frame):
         self.tv.pack(side="left", fill="both", expand=True)
         bar.pack(side="right", fill="y")
 
-    def update_delete_icon(self, is_dark=False):
-        """Refreshes or creates the PhotoImage used for delete buttons."""
-        if self.show_delete:
+    def update_delete_icon(self, is_dark=None):
+        """Refreshes or creates the PhotoImage used for delete buttons and updates all visible rows."""
+        if not self.show_delete:
+            return
+
+        if is_dark is None:
             try:
-                bg = "#2a1518" if is_dark else "#fef2f2"
-                border = "#b91c1c" if is_dark else "#991b1b"
-                cross = "#ef4444" if is_dark else "#7f1d1d"
-                self._delete_icon = create_delete_icon(master=self, bg_color=bg, border_color=border, cross_color=cross)
+                import sv_ttk
+                theme_name = sv_ttk.get_theme()
+                if theme_name in ("dark", "light"):
+                    is_dark = (theme_name == "dark")
+                elif getattr(self, "_is_dark", None) is not None:
+                    is_dark = self._is_dark
+                else:
+                    from meal_planner.gui import theme
+                    is_dark = (theme.load() == "dark")
             except Exception:
-                self._delete_icon = None
+                is_dark = getattr(self, "_is_dark", False) or False
+
+        self._is_dark = bool(is_dark)
+
+        try:
+            bg = "#2d1f22" if self._is_dark else "#fbebec"
+            border = "#52272e" if self._is_dark else "#f0b8bd"
+            cross = "#f87171" if self._is_dark else "#c94a53"
+            self._delete_icon = create_delete_icon(master=self, bg_color=bg, border_color=border, cross_color=cross)
+        except Exception:
+            self._delete_icon = None
+
+        # Propagate updated icon to all currently rendered treeview rows
+        for child in self.tv.get_children(""):
+            try:
+                self.tv.item(child, image=self._delete_icon if self._delete_icon is not None else "")
+            except (tk.TclError, Exception):
+                pass
 
     def _ensure_delete_icon(self):
         """Ensures the delete icon exists and is valid in the current Tcl interpreter."""
         if not self.show_delete:
             return
         if self._delete_icon is None:
-            self.update_delete_icon()
+            self.update_delete_icon(getattr(self, "_is_dark", None))
             return
         try:
             self.tk.call("image", "type", str(self._delete_icon))
         except (tk.TclError, Exception):
-            self.update_delete_icon()
+            self.update_delete_icon(getattr(self, "_is_dark", None))
 
     def _handle_click(self, event):
         region = self.tv.identify("region", event.x, event.y)
@@ -153,7 +201,7 @@ class Table(ttk.Frame):
                 self.tv.insert("", "end", **kwargs)
             except tk.TclError as e:
                 if "image" in str(e).lower():
-                    self.update_delete_icon()
+                    self.update_delete_icon(getattr(self, "_is_dark", None))
                     if self._delete_icon is not None:
                         kwargs["image"] = self._delete_icon
                     else:
@@ -173,19 +221,50 @@ class LineChart(tk.Canvas):
     def __init__(self, master, height=150):
         super().__init__(master, height=height, highlightthickness=0)
         self.points, self.fg = [], "#000000"
-        self.bind("<Configure>", lambda e: self.draw())
+        self._ordinals = []
+        self._redraw_job = None
+        self.bind("<Configure>", self._on_configure)
+
+    def _on_configure(self, event=None):
+        if self._redraw_job is not None:
+            try:
+                self.after_cancel(self._redraw_job)
+            except Exception:
+                pass
+            self._redraw_job = None
+        self._redraw_job = self.after_idle(self._debounced_draw)
+
+    def _debounced_draw(self):
+        self._redraw_job = None
+        self.draw()
 
     def plot(self, points, background, foreground):
         self.points, self.fg = points, foreground
+        try:
+            self._ordinals = [date.fromisoformat(d).toordinal() for d, _ in points]
+        except Exception:
+            self._ordinals = list(range(len(points)))
         self.configure(background=background)
         self.draw()
 
     def draw(self):
+        if self._redraw_job is not None:
+            try:
+                self.after_cancel(self._redraw_job)
+            except Exception:
+                pass
+            self._redraw_job = None
         self.delete("all")
         if not self.points:
             return
         w, h, pad = self.winfo_width(), self.winfo_height(), 30
-        xs = [date.fromisoformat(d).toordinal() for d, _ in self.points]
+        if self._ordinals and len(self._ordinals) == len(self.points):
+            xs = self._ordinals
+        else:
+            try:
+                xs = [date.fromisoformat(d).toordinal() for d, _ in self.points]
+            except Exception:
+                xs = list(range(len(self.points)))
         ys = [y for _, y in self.points]
         x0, y0 = min(xs), min(ys)
         xy = [(pad + (x - x0) / ((max(xs) - x0) or 1) * (w - 2 * pad),

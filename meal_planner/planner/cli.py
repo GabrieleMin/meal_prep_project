@@ -12,7 +12,7 @@ from meal_planner.planner.storage import update_plan_shopping_list, save_plan
 from meal_planner.planner.week import plan_week, save_week
 
 
-STATUS_LABELS = {"ok": "nei limiti",
+STATUS_LABELS = {"ok": "within limits",
          "extra": "within limits with extra tolerance (finishes an open package)",
          "out_of_limits": "OUT OF LIMITS (it is the closest plan to the limits)"}
 
@@ -36,7 +36,7 @@ def print_plan(conn, p):
         print("\nTo buy: " + ", ".join(f"{names[i]} {q:.2f} {products[i]['unit']}"
                                              for i, q in p["missing"].items()))
     for a in p["warnings"]:
-        print("Attenzione:", a)
+        print("Warning:", a)
 
 
 def print_week(conn, plans):
@@ -61,7 +61,7 @@ def print_week(conn, plans):
         print("To buy: " + ", ".join(f"{names[i]} {q:.2f} {products[i]['unit']}"
                                           for i, q in missing.items()))
     for text, n in warnings.items():
-        print(f"Attenzione: {text}" + (f" (x{n})" if n > 1 else ""))
+        print(f"Warning: {text}" + (f" (x{n})" if n > 1 else ""))
 
 
 def _parse_date(text):

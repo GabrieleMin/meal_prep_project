@@ -8,8 +8,25 @@ def load_products(conn) -> dict:
         "SELECT ID, Unit, Grams_per_piece, Density_kg_per_L, "
         "Kcal_100g, Protein_100g, Carbs_100g, Fat_100g, Sugars_100g, "
         "Saturated_fat_100g, Fiber_100g, Salt_100g FROM PRODUCTS").fetchall()
-    return {r[0]: {"ID": r[0], "unit": r[1], "g_piece": r[2], "density": r[3],
-                   "macro": dict(zip(MACROS, r[4:]))} for r in rows}
+    return {
+        r[0]: {
+            "ID": r[0],
+            "unit": r[1],
+            "g_piece": r[2],
+            "density": r[3],
+            "macro": {
+                "Kcal": r[4],
+                "Protein": r[5],
+                "Carbs": r[6],
+                "Fat": r[7],
+                "Sugars": r[8],
+                "Saturated_fat": r[9],
+                "Fiber": r[10],
+                "Salt": r[11],
+            },
+        }
+        for r in rows
+    }
 
 
 def product_names(conn) -> dict:

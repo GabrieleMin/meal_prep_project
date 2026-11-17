@@ -21,6 +21,37 @@ from meal_planner.inventory import (
 )
 
 
+def _center_and_lift(dialog: tk.Toplevel, master=None):
+    """Centers the dialog relative to master (or screen) and lifts/focuses it."""
+    try:
+        dialog.update_idletasks()
+        if master and hasattr(master, "winfo_ismapped") and master.winfo_ismapped():
+            mx = master.winfo_rootx()
+            my = master.winfo_rooty()
+            mw = master.winfo_width()
+            mh = master.winfo_height()
+            dw = dialog.winfo_reqwidth()
+            dh = dialog.winfo_reqheight()
+            x = max(0, mx + (mw - dw) // 2)
+            y = max(0, my + (mh - dh) // 2)
+            dialog.geometry(f"+{x}+{y}")
+        else:
+            sw = dialog.winfo_screenwidth()
+            sh = dialog.winfo_screenheight()
+            dw = dialog.winfo_reqwidth()
+            dh = dialog.winfo_reqheight()
+            x = max(0, (sw - dw) // 2)
+            y = max(0, (sh - dh) // 2)
+            dialog.geometry(f"+{x}+{y}")
+    except Exception:
+        pass
+    try:
+        dialog.lift()
+        dialog.focus_force()
+    except Exception:
+        pass
+
+
 class ProductDialog(tk.Toplevel):
     """Asks for the data of a product not yet in the archive."""
 
@@ -214,6 +245,9 @@ class MealPrepDialog(tk.Toplevel):
 COLOR_RECOGNIZED = "#30a46c"    # Green
 COLOR_UNRECOGNIZED = "#f5a524"  # Orange
 
+# Cache for pulse-flash ttk PhotoImages & styles per Tk session/theme
+_RECONCILIATION_FLASH_STYLES = {}
+
 
 class RoundedEntry(ttk.Entry):
     """
@@ -372,15 +406,30 @@ class ReceiptReconciliationDialog(tk.Toplevel):
         except Exception:
             pass
         if hasattr(self, "_style_photos"):
-            self._style_photos.clear()
+            self._style_photos = []
         super().destroy()
 
     def _init_rounded_styles(self):
+        cache_key = (id(self.tk), bool(self.is_dark))
+        if cache_key in _RECONCILIATION_FLASH_STYLES:
+            self._style_photos = _RECONCILIATION_FLASH_STYLES[cache_key]
+            try:
+                style = ttk.Style(self)
+                theme_tag = "dark" if self.is_dark else "light"
+                for i in range(26):
+                    elem_name = f"RecFlash_{theme_tag}_{i}.field"
+                    style_name = f"RecFlash_{i}.TEntry"
+                    style.layout(style_name, [(elem_name, {"sticky": "nswe", "children": [("Entry.padding", {"sticky": "nswe", "children": [("Entry.textarea", {"sticky": "nswe"})]})]})])
+            except Exception:
+                pass
+            return
+
         self._style_photos = []
         try:
             from PIL import Image, ImageDraw, ImageTk
             style = ttk.Style(self)
             total_steps = 25
+            theme_tag = "dark" if self.is_dark else "light"
             for i in range(total_steps + 1):
                 if i == 0:
                     fill = self.color_std
@@ -400,7 +449,7 @@ class ReceiptReconciliationDialog(tk.Toplevel):
                 ph = ImageTk.PhotoImage(im)
                 self._style_photos.append(ph)
 
-                elem_name = f"RecFlash_{i}.field"
+                elem_name = f"RecFlash_{theme_tag}_{i}.field"
                 style_name = f"RecFlash_{i}.TEntry"
                 try:
                     self.tk.call("ttk::style", "element", "create", elem_name, "image", ph, "-border", 6, "-sticky", "nsew")
@@ -411,6 +460,7 @@ class ReceiptReconciliationDialog(tk.Toplevel):
                     style.configure(style_name, padding=(6, 1, 4, 2))
                 except Exception:
                     pass
+            _RECONCILIATION_FLASH_STYLES[cache_key] = self._style_photos
         except Exception:
             pass
 
@@ -571,6 +621,7 @@ class ReceiptReconciliationDialog(tk.Toplevel):
         self.canvas.bind("<Configure>", _on_canvas_configure)
 
         self._bind_mousewheel(self)
+        self._bind_mousewheel(container)
         self._bind_mousewheel(self.canvas)
         self._bind_mousewheel(self.table_frame)
 
@@ -826,9 +877,6 @@ class ReceiptReconciliationDialog(tk.Toplevel):
 
         for v in (kcal_var, prot_var, carb_var, fat_var):
             v.trace_add("write", _on_macro_write)
-
-        for w in (status_canvas, lbl_raw, ent_name, cb_unit, ent_weight, ent_packs, ent_kcal, ent_prot, ent_carb, ent_fat, cb_loc, ent_exp):
-            self._bind_mousewheel(w)
 
     def _update_row_status(self, row: dict):
         choice = row["product_var"].get().strip()
@@ -1583,7 +1631,7 @@ class ProfileSetupDialog(tk.Toplevel):
     """
     def __init__(self, parent, db_path: Optional[str] = None, wait: bool = True):
         super().__init__(parent)
-        self.title("Configura Profilo")
+        self.title("Set Up Profile")
         if parent:
             self.transient(parent)
         self.resizable(False, False)
@@ -1595,55 +1643,57 @@ class ProfileSetupDialog(tk.Toplevel):
 
         ttk.Label(
             container,
-            text="Inserisci i tuoi dati per iniziare:",
+            text="Enter your details to get started:",
             font=("TkDefaultFont", 11, "bold")
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
 
         # Static Fields
-        ttk.Label(container, text="Sesso:").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Sex:").grid(row=1, column=0, sticky="w", pady=4)
         self.v_sex = tk.StringVar(value="M")
         cb_sex = ttk.Combobox(container, textvariable=self.v_sex, values=["M", "F"], state="readonly", width=14)
         cb_sex.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=4)
 
-        ttk.Label(container, text="Altezza (cm):").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Height (cm):").grid(row=2, column=0, sticky="w", pady=4)
         self.v_height = tk.StringVar(value="175")
         ttk.Entry(container, textvariable=self.v_height, width=16).grid(row=2, column=1, sticky="w", padx=(10, 0), pady=4)
 
         # Dynamic Fields
-        ttk.Label(container, text="Peso attuale (kg):").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Current weight (kg):").grid(row=3, column=0, sticky="w", pady=4)
         self.v_weight = tk.StringVar(value="70")
         ttk.Entry(container, textvariable=self.v_weight, width=16).grid(row=3, column=1, sticky="w", padx=(10, 0), pady=4)
 
-        ttk.Label(container, text="Età (anni):").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Age (years):").grid(row=4, column=0, sticky="w", pady=4)
         self.v_age = tk.StringVar(value="25")
         ttk.Entry(container, textvariable=self.v_age, width=16).grid(row=4, column=1, sticky="w", padx=(10, 0), pady=4)
 
-        ttk.Label(container, text="Livello di attività:").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Activity level:").grid(row=5, column=0, sticky="w", pady=4)
         self.v_activity = tk.StringVar(value="moderate")
         from meal_planner.engine.constants import PAL
         cb_act = ttk.Combobox(container, textvariable=self.v_activity, values=sorted(PAL.keys()), state="readonly", width=14)
         cb_act.grid(row=5, column=1, sticky="w", padx=(10, 0), pady=4)
 
-        ttk.Label(container, text="Obiettivo:").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Goal:").grid(row=6, column=0, sticky="w", pady=4)
         self.v_goal = tk.StringVar(value="maintenance")
         cb_goal = ttk.Combobox(container, textvariable=self.v_goal, values=["maintenance", "weight_loss", "weight_gain"], state="readonly", width=14)
         cb_goal.grid(row=6, column=1, sticky="w", padx=(10, 0), pady=4)
 
-        ttk.Label(container, text="Peso obiettivo (kg):").grid(row=7, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Target weight (kg):").grid(row=7, column=0, sticky="w", pady=4)
         self.v_target_weight = tk.StringVar(value="70")
         ttk.Entry(container, textvariable=self.v_target_weight, width=16).grid(row=7, column=1, sticky="w", padx=(10, 0), pady=4)
 
-        ttk.Label(container, text="Tasso settimanale (kg/settimana):").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Weekly rate (kg/week):").grid(row=8, column=0, sticky="w", pady=4)
         self.v_weekly_rate = tk.StringVar(value="0.5")
         ttk.Entry(container, textvariable=self.v_weekly_rate, width=16).grid(row=8, column=1, sticky="w", padx=(10, 0), pady=4)
 
         btn_row = ttk.Frame(container)
         btn_row.grid(row=9, column=0, columnspan=2, sticky="e", pady=(16, 0))
-        ttk.Button(btn_row, text="Annulla", command=self.cancel).pack(side="right", padx=(6, 0))
-        ttk.Button(btn_row, text="Salva Profilo", command=self.save).pack(side="right")
+        ttk.Button(btn_row, text="Cancel", command=self.cancel).pack(side="right", padx=(6, 0))
+        ttk.Button(btn_row, text="Save Profile", command=self.save).pack(side="right")
 
         self.protocol("WM_DELETE_WINDOW", self.cancel)
         self.bind("<Escape>", lambda e: self.cancel())
+
+        _center_and_lift(self, parent)
 
         try:
             self.grab_set()
@@ -1656,7 +1706,7 @@ class ProfileSetupDialog(tk.Toplevel):
     def save(self) -> bool:
         sex = self.v_sex.get().strip()
         if sex not in ("M", "F"):
-            messagebox.showerror("Errore", "Seleziona 'M' o 'F' per il sesso.", parent=self)
+            messagebox.showerror("Error", "Please select 'M' or 'F' for sex.", parent=self)
             return False
         try:
             height = float(self.v_height.get().strip())
@@ -1665,7 +1715,7 @@ class ProfileSetupDialog(tk.Toplevel):
             if height <= 0 or weight <= 0 or age <= 0:
                 raise ValueError()
         except ValueError:
-            messagebox.showerror("Errore", "Altezza, peso ed età devono essere valori numerici positivi.", parent=self)
+            messagebox.showerror("Error", "Height, weight, and age must be positive numerical values.", parent=self)
             return False
 
         activity = self.v_activity.get().strip()
@@ -1711,7 +1761,7 @@ class ProfileSetupDialog(tk.Toplevel):
             self.destroy()
             return True
         except Exception as e:
-            messagebox.showerror("Errore Salvataggio", str(e), parent=self)
+            messagebox.showerror("Save Error", str(e), parent=self)
             return False
 
     def cancel(self):
@@ -1805,7 +1855,7 @@ class QuickProductDialog(tk.Toplevel):
     """
     def __init__(self, master=None, name: str = "", suggested_unit: str = "g", wait: bool = True, db_path: Optional[str] = None):
         super().__init__(master)
-        self.title("Nuovo Prodotto / New Product")
+        self.title("New Product")
         if master:
             self.transient(master)
         self.resizable(False, False)
@@ -1815,27 +1865,27 @@ class QuickProductDialog(tk.Toplevel):
         container = ttk.Frame(self, padding=14)
         container.pack(fill="both", expand=True)
 
-        ttk.Label(container, text=f"Prodotto non trovato: '{name}'\nInserisci i dati per aggiungerlo al catalogo:",
+        ttk.Label(container, text=f"Product not found: '{name}'\nEnter details to add it to catalog:",
                   font=("TkDefaultFont", 10, "bold"), wraplength=340).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
-        ttk.Label(container, text="Nome:").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Label(container, text="Name:").grid(row=1, column=0, sticky="w", pady=3)
         self.v_name = tk.StringVar(value=name)
         self.e_name = ttk.Entry(container, textvariable=self.v_name, width=24)
         self.e_name.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=3)
 
-        ttk.Label(container, text="Unità di misura:").grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Label(container, text="Unit of measure:").grid(row=2, column=0, sticky="w", pady=3)
         self.v_unit = tk.StringVar(value=suggested_unit if suggested_unit in ("g", "kg", "ml", "L", "pcs", "pz") else "g")
         self.cb_unit = ttk.Combobox(container, textvariable=self.v_unit, values=["g", "kg", "ml", "L", "pcs"], state="readonly", width=10)
         self.cb_unit.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=3)
 
-        ttk.Label(container, text="Valori per 100g:", font=("TkDefaultFont", 9, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        ttk.Label(container, text="Values per 100g:", font=("TkDefaultFont", 9, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 4))
 
         fields = [
             ("kcal", "Kcal *:", "v_kcal", "0"),
-            ("prot", "Proteine (g) *:", "v_prot", "0"),
-            ("carb", "Carboidrati (g) *:", "v_carb", "0"),
-            ("fat", "Grassi (g) *:", "v_fat", "0"),
-            ("fiber", "Fibre (g):", "v_fiber", ""),
+            ("prot", "Protein (g) *:", "v_prot", "0"),
+            ("carb", "Carbs (g) *:", "v_carb", "0"),
+            ("fat", "Fat (g) *:", "v_fat", "0"),
+            ("fiber", "Fiber (g):", "v_fiber", ""),
         ]
         self.macro_vars = {}
         for idx, (key, label, var_name, default_val) in enumerate(fields, start=4):
@@ -1849,13 +1899,15 @@ class QuickProductDialog(tk.Toplevel):
 
         btn_bar = ttk.Frame(container)
         btn_bar.grid(row=9, column=0, columnspan=2, sticky="e", pady=(12, 0))
-        self.btn_cancel = ttk.Button(btn_bar, text="Annulla", command=self.cancel)
+        self.btn_cancel = ttk.Button(btn_bar, text="Cancel", command=self.cancel)
         self.btn_cancel.pack(side="right", padx=(6, 0))
-        self.btn_save = ttk.Button(btn_bar, text="Aggiungi", command=self.save)
+        self.btn_save = ttk.Button(btn_bar, text="Add", command=self.save)
         self.btn_save.pack(side="right")
 
         self.protocol("WM_DELETE_WINDOW", self.cancel)
         self.bind("<Escape>", lambda e: self.cancel())
+
+        _center_and_lift(self, master)
 
         try:
             self.grab_set()
@@ -1868,11 +1920,11 @@ class QuickProductDialog(tk.Toplevel):
     def save(self) -> bool:
         name = self.v_name.get().strip()
         if not name:
-            messagebox.showerror("Errore", "Il nome del prodotto è obbligatorio.", parent=self)
+            messagebox.showerror("Error", "Product name is required.", parent=self)
             return False
         unit = self.v_unit.get().strip()
         if not unit:
-            messagebox.showerror("Errore", "L'unità di misura è obbligatoria.", parent=self)
+            messagebox.showerror("Error", "Unit of measure is required.", parent=self)
             return False
 
         try:
@@ -1883,7 +1935,7 @@ class QuickProductDialog(tk.Toplevel):
             if kcal < 0 or prot < 0 or carb < 0 or fat < 0:
                 raise ValueError()
         except (ValueError, TypeError):
-            messagebox.showerror("Errore", "Kcal, Proteine, Carboidrati e Grassi devono essere numeri non negativi.", parent=self)
+            messagebox.showerror("Error", "Kcal, Protein, Carbs, and Fat must be non-negative numbers.", parent=self)
             return False
 
         fiber = None
@@ -1894,7 +1946,7 @@ class QuickProductDialog(tk.Toplevel):
                     raise ValueError()
                 fiber = fiber_val
             except (ValueError, TypeError):
-                messagebox.showerror("Errore", "Le fibre devono essere un numero non negativo.", parent=self)
+                messagebox.showerror("Error", "Fiber must be a non-negative number.", parent=self)
                 return False
 
         macros = {
@@ -1952,7 +2004,7 @@ class AddRecipeDialog(tk.Toplevel):
         on_unknown_product_callback=None,
     ):
         super().__init__(master)
-        self.title("Nuova Ricetta / Add Recipe")
+        self.title("New Recipe")
         if master:
             self.transient(master)
         self.resizable(True, True)
@@ -1964,12 +2016,15 @@ class AddRecipeDialog(tk.Toplevel):
         self.result = None
         self.last_error = None
         self.ingredients = []
+        self._focus_timer = None
 
         self._init_variables()
         self._init_ui()
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.bind("<Escape>", lambda e: self._on_cancel())
+
+        _center_and_lift(self, master)
 
         try:
             self.grab_set()
@@ -1997,17 +2052,29 @@ class AddRecipeDialog(tk.Toplevel):
         self.v_unit = tk.StringVar(value="g")
         self.v_to_taste = tk.BooleanVar(value=False)
 
-        # Load meals from database
-        self.v_meals = self._load_meals()
-
-    def _load_meals(self) -> _MealDict:
-        meals = []
+        # Consolidated database load during initialization
         try:
             with self._get_conn() as conn:
+                self.v_meals = self._load_meals(conn=conn)
+                self._known_ingredients = self._load_known_ingredients(conn=conn)
+        except Exception:
+            self.v_meals = self._load_meals()
+            self._known_ingredients = self._load_known_ingredients()
+
+    def _load_meals(self, conn=None) -> _MealDict:
+        meals = []
+        try:
+            if conn is not None:
                 cur = conn.cursor()
                 cur.execute("SELECT Name FROM MEALS ORDER BY Sort_Order")
                 for (m_name,) in cur.fetchall():
                     meals.append((m_name, tk.BooleanVar(value=False)))
+            else:
+                with self._get_conn() as c:
+                    cur = c.cursor()
+                    cur.execute("SELECT Name FROM MEALS ORDER BY Sort_Order")
+                    for (m_name,) in cur.fetchall():
+                        meals.append((m_name, tk.BooleanVar(value=False)))
         except Exception:
             pass
         if not meals:
@@ -2015,12 +2082,17 @@ class AddRecipeDialog(tk.Toplevel):
                 meals.append((m_name, tk.BooleanVar(value=False)))
         return _MealDict(meals)
 
-    def _load_known_ingredients(self) -> list:
+    def _load_known_ingredients(self, conn=None) -> list:
         try:
-            with self._get_conn() as conn:
+            if conn is not None:
                 cur = conn.cursor()
                 cur.execute("SELECT Name FROM ALIASES UNION SELECT Name FROM SUBSTITUTE_GROUPS ORDER BY Name")
                 return [r[0] for r in cur.fetchall()]
+            else:
+                with self._get_conn() as c:
+                    cur = c.cursor()
+                    cur.execute("SELECT Name FROM ALIASES UNION SELECT Name FROM SUBSTITUTE_GROUPS ORDER BY Name")
+                    return [r[0] for r in cur.fetchall()]
         except Exception:
             return []
 
@@ -2030,15 +2102,15 @@ class AddRecipeDialog(tk.Toplevel):
         main_frame.columnconfigure(0, weight=1)
 
         # 1. Top Section: Name, Servings, Meals
-        meta_frame = ttk.LabelFrame(main_frame, text="Dettagli Ricetta / Recipe Details", padding=10)
+        meta_frame = ttk.LabelFrame(main_frame, text="Recipe Details", padding=10)
         meta_frame.pack(fill="x", pady=(0, 8))
         meta_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(meta_frame, text="Nome Ricetta:").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(meta_frame, text="Recipe Name:").grid(row=0, column=0, sticky="w", pady=4)
         self.e_name = ttk.Entry(meta_frame, textvariable=self.v_name)
         self.e_name.grid(row=0, column=1, sticky="ew", padx=(8, 16), pady=4)
 
-        ttk.Label(meta_frame, text="Porzioni:").grid(row=0, column=2, sticky="w", pady=4)
+        ttk.Label(meta_frame, text="Servings:").grid(row=0, column=2, sticky="w", pady=4)
         self.e_servings = ttk.Entry(meta_frame, textvariable=self.v_servings, width=6)
         self.e_servings.grid(row=0, column=3, sticky="w", padx=(8, 0), pady=4)
         self.v_servings.trace_add("write", lambda *args: self._update_macro_summary())
@@ -2046,57 +2118,63 @@ class AddRecipeDialog(tk.Toplevel):
         # Meals checkboxes
         meal_frame = ttk.Frame(meta_frame)
         meal_frame.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 2))
-        ttk.Label(meal_frame, text="Pasti:").pack(side="left", padx=(0, 8))
+        ttk.Label(meal_frame, text="Meals:").pack(side="left", padx=(0, 8))
         for m_name, var in self.v_meals.items():
             ttk.Checkbutton(meal_frame, text=m_name.capitalize(), variable=var).pack(side="left", padx=(0, 10))
 
         # Notes
-        notes_frame = ttk.LabelFrame(main_frame, text="Note / Preparation Notes", padding=8)
+        notes_frame = ttk.LabelFrame(main_frame, text="Preparation Notes", padding=8)
         notes_frame.pack(fill="x", pady=(0, 8))
         self.t_notes = tk.Text(notes_frame, height=3, wrap="word")
         self.t_notes.pack(fill="x", expand=True)
         self.t_notes.bind("<FocusOut>", lambda e: self.v_notes.set(self.notes))
 
         # 2. Ingredient Builder Section
-        ing_box = ttk.LabelFrame(main_frame, text="Aggiungi Ingrediente / Add Ingredient", padding=10)
+        ing_box = ttk.LabelFrame(main_frame, text="Add Ingredient", padding=10)
         ing_box.pack(fill="x", pady=(0, 8))
         ing_box.columnconfigure(1, weight=1)
 
-        ttk.Label(ing_box, text="Ingrediente:").grid(row=0, column=0, sticky="w", pady=2)
-        known = self._load_known_ingredients()
+        ttk.Label(ing_box, text="Ingredient:").grid(row=0, column=0, sticky="w", pady=2)
+        known = getattr(self, "_known_ingredients", None) or self._load_known_ingredients()
         self.cb_ingredient = ttk.Combobox(ing_box, textvariable=self.v_ingredient_name, values=known, width=22)
         self.cb_ingredient.grid(row=0, column=1, sticky="ew", padx=(6, 12), pady=2)
 
-        ttk.Label(ing_box, text="Quantità:").grid(row=0, column=2, sticky="w", pady=2)
+        ttk.Label(ing_box, text="Quantity:").grid(row=0, column=2, sticky="w", pady=2)
         self.e_quantity = ttk.Entry(ing_box, textvariable=self.v_quantity, width=8)
         self.e_quantity.grid(row=0, column=3, sticky="w", padx=(6, 12), pady=2)
 
-        ttk.Label(ing_box, text="Unità:").grid(row=0, column=4, sticky="w", pady=2)
+        ttk.Label(ing_box, text="Unit:").grid(row=0, column=4, sticky="w", pady=2)
         self.cb_unit = ttk.Combobox(ing_box, textvariable=self.v_unit, values=["g", "kg", "ml", "L", "pcs", "tbsp", "tsp"], state="readonly", width=8)
         self.cb_unit.grid(row=0, column=5, sticky="w", padx=(6, 12), pady=2)
 
-        self.chk_to_taste = ttk.Checkbutton(ing_box, text="Q.b.", variable=self.v_to_taste)
+        self.chk_to_taste = ttk.Checkbutton(ing_box, text="To taste (q.b.)", variable=self.v_to_taste)
         self.chk_to_taste.grid(row=0, column=6, sticky="w", padx=(0, 12), pady=2)
 
-        self.btn_add_ingredient = ttk.Button(ing_box, text="Aggiungi", command=self.add_ingredient)
+        self.btn_add_ingredient = ttk.Button(ing_box, text="Add", command=self.add_ingredient)
         self.btn_add_ingredient.grid(row=0, column=7, sticky="w", pady=2)
 
+        ttk.Label(
+            ing_box,
+            text="ℹ️ 'To taste' (q.b. / quanto basta): for discretionary ingredients added to taste without fixed nutritional weight (e.g. salt, pepper, spices, herbs).",
+            font=("TkDefaultFont", 8, "italic"),
+        ).grid(row=1, column=0, columnspan=8, sticky="w", pady=(2, 0))
+
         # 3. Ingredients Visual Table
-        table_frame = ttk.LabelFrame(main_frame, text="Ingredienti Inseriti (Totale Ricetta)", padding=8)
+        table_frame = ttk.LabelFrame(main_frame, text="Added Ingredients (Recipe Total)", padding=8)
         table_frame.pack(fill="both", expand=True, pady=(0, 8))
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
         cols = ("product", "quantity", "unit", "to_taste", "kcal", "prot", "carb", "fat")
         self.t_ingredients = ttk.Treeview(table_frame, columns=cols, show="headings", height=5)
-        self.t_ingredients.heading("product", text="Ingrediente")
-        self.t_ingredients.heading("quantity", text="Quantità")
-        self.t_ingredients.heading("unit", text="Unità")
-        self.t_ingredients.heading("to_taste", text="Q.b.")
+        self.t_ingredients.heading("product", text="Ingredient")
+        self.t_ingredients.heading("quantity", text="Quantity")
+        self.t_ingredients.heading("unit", text="Unit")
+        self.t_ingredients.heading("to_taste", text="To taste")
         self.t_ingredients.heading("kcal", text="Kcal")
         self.t_ingredients.heading("prot", text="Prot (g)")
-        self.t_ingredients.heading("carb", text="Carb (g)")
-        self.t_ingredients.heading("fat", text="Grassi (g)")
+        self.t_ingredients.heading("carb", text="Carbs (g)")
+        self.t_ingredients.heading("fat", text="Fat (g)")
 
         self.t_ingredients.column("product", width=180, anchor="w")
         self.t_ingredients.column("quantity", width=70, anchor="e")
@@ -2119,14 +2197,14 @@ class AddRecipeDialog(tk.Toplevel):
 
         self.lbl_macro_summary = ttk.Label(
             summary_row,
-            text="Totale per porzione (1 di 1): 0.0 kcal | Prot: 0.0g | Carb: 0.0g | Grassi: 0.0g",
+            text="Total per serving (1 of 1): 0.0 kcal | Prot: 0.0g | Carbs: 0.0g | Fat: 0.0g",
             font=("TkDefaultFont", 9, "bold"),
         )
         self.lbl_macro_summary.grid(row=0, column=0, sticky="w")
 
         self.btn_remove_ingredient = ttk.Button(
             summary_row,
-            text="Rimuovi Ingrediente",
+            text="Remove Ingredient",
             command=self.remove_ingredient,
         )
         self.btn_remove_ingredient.grid(row=0, column=1, sticky="e")
@@ -2134,10 +2212,29 @@ class AddRecipeDialog(tk.Toplevel):
         # 4. Action Buttons Bar
         action_bar = ttk.Frame(main_frame)
         action_bar.pack(fill="x", pady=(6, 0))
-        self.btn_cancel = ttk.Button(action_bar, text="Annulla", command=self._on_cancel)
+        self.btn_cancel = ttk.Button(action_bar, text="Cancel", command=self._on_cancel)
         self.btn_cancel.pack(side="right", padx=(8, 0))
-        self.btn_save = ttk.Button(action_bar, text="Salva Ricetta", command=self._on_save)
+        self.btn_save = ttk.Button(action_bar, text="Save Recipe", command=self._on_save)
         self.btn_save.pack(side="right")
+
+        # Keyboard ergonomics & quick navigation
+        self.bind("<Control-Return>", lambda e: self._on_save())
+        self.bind("<Control-s>", lambda e: self._on_save())
+        self.bind("<Control-S>", lambda e: self._on_save())
+        self.e_name.bind("<Return>", lambda e: self.cb_ingredient.focus_set())
+        self.e_quantity.bind("<Return>", lambda e: self.add_ingredient())
+        self.cb_ingredient.bind("<Return>", lambda e: self.e_quantity.focus_set() if not self.v_quantity.get().strip() else self.add_ingredient())
+        self.t_ingredients.bind("<Delete>", lambda e: self.remove_ingredient())
+        self.t_ingredients.bind("<BackSpace>", lambda e: self.remove_ingredient())
+
+        # Auto-focus on recipe name
+        self._focus_timer = self.after(100, self._set_initial_focus)
+
+    def _set_initial_focus(self):
+        try:
+            self.e_name.focus_set()
+        except Exception:
+            pass
 
     @property
     def notes(self) -> str:
@@ -2162,46 +2259,52 @@ class AddRecipeDialog(tk.Toplevel):
             except Exception:
                 pass
 
-    def _calculate_ingredient_macros(self, name: str, quantity: float, unit: str) -> dict:
+    def _calculate_ingredient_macros(self, name: str, quantity: float, unit: str, conn=None) -> dict:
         macros = {"kcal": 0.0, "prot": 0.0, "carb": 0.0, "fat": 0.0}
+        def _calc_with_conn(c):
+            cur = c.cursor()
+            cur.execute("""
+                SELECT p.Unit, p.Kcal_100g, p.Protein_100g, p.Carbs_100g, p.Fat_100g,
+                       p.Grams_per_piece, p.Density_kg_per_L
+                FROM ALIASES a
+                JOIN PRODUCTS p ON a.ID = p.ID
+                WHERE a.Name = ? COLLATE NOCASE
+            """, (name,))
+            row = cur.fetchone()
+            if not row:
+                return macros
+            p_unit, kcal_100, prot_100, carb_100, fat_100, g_pc, dens = row
+            g = None
+            if unit == "g":
+                g = quantity
+            elif unit == "kg":
+                g = quantity * 1000.0
+            elif unit == "pcs":
+                g = quantity * g_pc if g_pc else None
+            elif unit in ("ml", "L", "tbsp", "tsp"):
+                d = dens or 1.0
+                factors = {"ml": 1.0, "L": 1000.0, "tbsp": 15.0, "tsp": 5.0}
+                g = quantity * factors.get(unit, 1.0) * d
+            if g is not None:
+                macros["kcal"] = round(g / 100.0 * kcal_100, 2)
+                macros["prot"] = round(g / 100.0 * prot_100, 2)
+                macros["carb"] = round(g / 100.0 * carb_100, 2)
+                macros["fat"] = round(g / 100.0 * fat_100, 2)
+            return macros
+
         try:
-            with self._get_conn() as conn:
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT p.Unit, p.Kcal_100g, p.Protein_100g, p.Carbs_100g, p.Fat_100g,
-                           p.Grams_per_piece, p.Density_kg_per_L
-                    FROM ALIASES a
-                    JOIN PRODUCTS p ON a.ID = p.ID
-                    WHERE a.Name = ? COLLATE NOCASE
-                """, (name,))
-                row = cur.fetchone()
-                if not row:
-                    return macros
-                p_unit, kcal_100, prot_100, carb_100, fat_100, g_pc, dens = row
-                g = None
-                if unit == "g":
-                    g = quantity
-                elif unit == "kg":
-                    g = quantity * 1000.0
-                elif unit == "pcs":
-                    g = quantity * g_pc if g_pc else None
-                elif unit in ("ml", "L", "tbsp", "tsp"):
-                    d = dens or 1.0
-                    factors = {"ml": 1.0, "L": 1000.0, "tbsp": 15.0, "tsp": 5.0}
-                    g = quantity * factors.get(unit, 1.0) * d
-                if g is not None:
-                    macros["kcal"] = round(g / 100.0 * kcal_100, 2)
-                    macros["prot"] = round(g / 100.0 * prot_100, 2)
-                    macros["carb"] = round(g / 100.0 * carb_100, 2)
-                    macros["fat"] = round(g / 100.0 * fat_100, 2)
+            if conn is not None:
+                return _calc_with_conn(conn)
+            else:
+                with self._get_conn() as c:
+                    return _calc_with_conn(c)
         except Exception:
-            pass
-        return macros
+            return macros
 
     def add_ingredient(self) -> bool:
         name = (self.v_ingredient_name.get() or self.cb_ingredient.get()).strip()
         if not name:
-            messagebox.showerror("Errore", "Seleziona o inserisci un ingrediente.", parent=self)
+            messagebox.showerror("Error", "Please select or enter an ingredient.", parent=self)
             return False
 
         unit = (self.v_unit.get() or self.cb_unit.get()).strip()
@@ -2219,13 +2322,16 @@ class AddRecipeDialog(tk.Toplevel):
                 if qty <= 0:
                     raise ValueError()
             except (ValueError, TypeError):
-                messagebox.showerror("Errore", "La quantità deve essere un numero positivo (> 0).", parent=self)
+                messagebox.showerror("Error", "Quantity must be a positive number (> 0).", parent=self)
                 return False
 
         from meal_planner.recipes import is_ingredient_known, register_product_on_the_fly
 
+        macros = None
         with self._get_conn() as conn:
             known = is_ingredient_known(conn, name)
+            if known:
+                macros = self._calculate_ingredient_macros(name, qty, unit, conn=conn)
 
         if not known:
             dlg_result = None
@@ -2245,10 +2351,12 @@ class AddRecipeDialog(tk.Toplevel):
                     unit=dlg_result["unit"],
                     macros=dlg_result["macros"],
                 )
-            name = dlg_result["name"]
-            self.cb_ingredient["values"] = self._load_known_ingredients()
+                name = dlg_result["name"]
+                self.cb_ingredient["values"] = self._load_known_ingredients(conn=conn)
+                macros = self._calculate_ingredient_macros(name, qty, unit, conn=conn)
 
-        macros = self._calculate_ingredient_macros(name, qty, unit)
+        if macros is None:
+            macros = self._calculate_ingredient_macros(name, qty, unit)
         item = {
             "product": name,
             "quantity": qty,
@@ -2265,6 +2373,10 @@ class AddRecipeDialog(tk.Toplevel):
         self.v_quantity.set("")
         self.e_quantity.delete(0, "end")
         self.v_to_taste.set(False)
+        try:
+            self.cb_ingredient.focus_set()
+        except Exception:
+            pass
         return True
 
     def remove_ingredient(self, index: Optional[int] = None) -> bool:
@@ -2286,7 +2398,7 @@ class AddRecipeDialog(tk.Toplevel):
             self._refresh_ingredients_table()
             self._update_macro_summary()
             return True
-        messagebox.showwarning("Attenzione", "Seleziona un ingrediente da rimuovere.", parent=self)
+        messagebox.showwarning("Warning", "Please select an ingredient to remove.", parent=self)
         return False
 
     def _refresh_ingredients_table(self):
@@ -2300,7 +2412,7 @@ class AddRecipeDialog(tk.Toplevel):
                     ing["product"],
                     f"{ing['quantity']:g}",
                     ing["unit"],
-                    "Sì" if ing["to_taste"] else "No",
+                    "Yes" if ing["to_taste"] else "No",
                     f"{ing.get('kcal', 0.0):.1f}",
                     f"{ing.get('prot', 0.0):.1f}",
                     f"{ing.get('carb', 0.0):.1f}",
@@ -2327,22 +2439,22 @@ class AddRecipeDialog(tk.Toplevel):
         per_carb = tot_carb / servings
         per_fat = tot_fat / servings
         self.lbl_macro_summary.configure(
-            text=f"Totale per porzione (1 di {servings:g}): {per_kcal:.1f} kcal | Prot: {per_prot:.1f}g | Carb: {per_carb:.1f}g | Grassi: {per_fat:.1f}g"
+            text=f"Total per serving (1 of {servings:g}): {per_kcal:.1f} kcal | Prot: {per_prot:.1f}g | Carbs: {per_carb:.1f}g | Fat: {per_fat:.1f}g"
         )
 
     def _on_save(self) -> bool:
         name = self.v_name.get().strip()
         if not name:
-            messagebox.showerror("Errore", "Il nome della ricetta è obbligatorio.", parent=self)
+            messagebox.showerror("Error", "Recipe name is required.", parent=self)
             return False
 
         meals = [m for m, var in self.v_meals.items() if var.get()]
         if not meals:
-            messagebox.showerror("Errore", "Seleziona almeno un pasto per la ricetta.", parent=self)
+            messagebox.showerror("Error", "Select at least one meal for the recipe.", parent=self)
             return False
 
         if not self.ingredients:
-            messagebox.showerror("Errore", "Aggiungi almeno un ingrediente alla ricetta.", parent=self)
+            messagebox.showerror("Error", "Add at least one ingredient to the recipe.", parent=self)
             return False
 
         try:
@@ -2350,7 +2462,7 @@ class AddRecipeDialog(tk.Toplevel):
             if not math.isfinite(servings) or servings <= 0:
                 raise ValueError()
         except (ValueError, TypeError):
-            messagebox.showerror("Errore", "Il numero di porzioni deve essere un numero positivo (> 0).", parent=self)
+            messagebox.showerror("Error", "Number of servings must be a positive number (> 0).", parent=self)
             return False
 
         scaled_ingredients = []
@@ -2383,10 +2495,25 @@ class AddRecipeDialog(tk.Toplevel):
             return True
         except Exception as e:
             self.last_error = str(e)
-            messagebox.showerror("Errore Salvataggio", str(e), parent=self)
+            messagebox.showerror("Save Error", str(e), parent=self)
             return False
 
+    def destroy(self):
+        if hasattr(self, "_focus_timer") and self._focus_timer:
+            try:
+                self.after_cancel(self._focus_timer)
+            except Exception:
+                pass
+            self._focus_timer = None
+        super().destroy()
+
     def _on_cancel(self):
+        if hasattr(self, "_focus_timer") and self._focus_timer:
+            try:
+                self.after_cancel(self._focus_timer)
+            except Exception:
+                pass
+            self._focus_timer = None
         self.result = None
         self.destroy()
 
@@ -2394,4 +2521,515 @@ class AddRecipeDialog(tk.Toplevel):
     on_save = _on_save
     cancel = _on_cancel
     on_cancel = _on_cancel
+
+
+class RecipeDetailsDialog(tk.Toplevel):
+    """
+    Modal dialog displaying detailed view of an existing recipe:
+    - Recipe Name & Associated Meals
+    - Preparation Notes
+    - Full ingredients list with quantities, units, and Q.b. flags
+    - Live macronutrient summary from RECIPE_MACROS_VIEW
+    """
+    def __init__(self, master=None, recipe_name: str = "", db_path: Optional[str] = None, wait: bool = True):
+        super().__init__(master)
+        self.title(f"Recipe Details — {recipe_name}")
+        if master:
+            self.transient(master)
+        self.resizable(True, True)
+        self.minsize(640, 480)
+        self.db_path = db_path
+        self._wait = wait
+        self.recipe_name = str(recipe_name).strip()
+
+        self._init_ui()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda e: self.destroy())
+
+        _center_and_lift(self, master)
+
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+
+        if wait:
+            self.wait_window(self)
+
+    @contextlib.contextmanager
+    def _get_conn(self):
+        from meal_planner.db.connection import get_connection
+        conn = get_connection(self.db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _init_ui(self):
+        main_frame = ttk.Frame(self, padding=16)
+        main_frame.pack(fill="both", expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(2, weight=1)
+
+        # 1. Header Frame
+        header = ttk.Frame(main_frame)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(header, text=self.recipe_name, font=("TkDefaultFont", 13, "bold")).pack(anchor="w")
+
+        # Load recipe details from DB
+        notes = ""
+        meals = []
+        macros = (0, 0, 0, 0, 0)
+        ingredients = []
+        try:
+            with self._get_conn() as conn:
+                cur = conn.cursor()
+                r = cur.execute("SELECT Recipe_ID, Notes FROM RECIPES WHERE Name = ?", (self.recipe_name,)).fetchone()
+                if r:
+                    rid, notes = r
+                    meals = [m[0].capitalize() for m in cur.execute(
+                        "SELECT Meal FROM RECIPE_MEALS WHERE Recipe_ID = ? ORDER BY Meal", (rid,)).fetchall()]
+                    m_row = cur.execute(
+                        "SELECT Kcal, Protein, Carbs, Fat, Fiber FROM RECIPE_MACROS_VIEW WHERE Recipe_ID = ?", (rid,)).fetchone()
+                    if m_row:
+                        macros = m_row
+                    ingredients = cur.execute('''
+                        SELECT 
+                            COALESCE(g.Name, a.Name, 'Product ' || ri.ID) AS IngName,
+                            ri.Quantity, ri.Unit, ri.To_Taste
+                        FROM RECIPE_INGREDIENTS ri
+                        LEFT JOIN SUBSTITUTE_GROUPS g ON ri.Group_ID = g.Group_ID
+                        LEFT JOIN (SELECT ID, MIN(Name) as Name FROM ALIASES GROUP BY ID) a ON ri.ID = a.ID
+                        WHERE ri.Recipe_ID = ?
+                        ORDER BY ri.Row_ID
+                    ''', (rid,)).fetchall()
+        except Exception:
+            pass
+
+        # Meta tags / meals info
+        meals_text = f"Associated meals: {', '.join(meals) if meals else 'All meals'}"
+        ttk.Label(header, text=meals_text, font=("TkDefaultFont", 9)).pack(anchor="w", pady=(2, 0))
+
+        # Notes section if present
+        if notes:
+            n_frame = ttk.LabelFrame(main_frame, text="Preparation Notes", padding=8)
+            n_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+            ttk.Label(n_frame, text=notes, wraplength=580, justify="left").pack(anchor="w")
+
+        # 2. Ingredients table
+        t_frame = ttk.LabelFrame(main_frame, text="Ingredients for 1 serving", padding=8)
+        t_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
+        t_frame.columnconfigure(0, weight=1)
+        t_frame.rowconfigure(0, weight=1)
+
+        cols = ("name", "quantity", "unit", "to_taste")
+        tv = ttk.Treeview(t_frame, columns=cols, show="headings", height=6)
+        tv.heading("name", text="Ingredient")
+        tv.heading("quantity", text="Quantity")
+        tv.heading("unit", text="Unit")
+        tv.heading("to_taste", text="To taste (q.b.)")
+        tv.column("name", width=280, anchor="w")
+        tv.column("quantity", width=90, anchor="e")
+        tv.column("unit", width=80, anchor="center")
+        tv.column("to_taste", width=80, anchor="center")
+
+        sb = ttk.Scrollbar(t_frame, orient="vertical", command=tv.yview)
+        tv.configure(yscrollcommand=sb.set)
+        tv.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+
+        for ing in ingredients:
+            ing_name, qty, unit, to_taste = ing
+            qb_str = "Yes" if to_taste else "No"
+            tv.insert("", "end", values=(ing_name, f"{qty:g}", unit, qb_str))
+
+        ttk.Label(
+            t_frame,
+            text="ℹ️ 'To taste' (q.b. / quanto basta): ingredients added as needed to taste without fixed nutritional weight (e.g. salt, pepper, spices).",
+            font=("TkDefaultFont", 8, "italic"),
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        # 3. Macro summary bar
+        kcal, prot, carb, fat, fiber = macros
+        summary_text = f"Per-serving values: {kcal:.0f} kcal  |  Prot: {prot:.1f}g  |  Carbs: {carb:.1f}g  |  Fat: {fat:.1f}g  |  Fiber: {fiber:.1f}g"
+        summary_frame = ttk.Frame(main_frame)
+        summary_frame.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        ttk.Label(summary_frame, text=summary_text, font=("TkDefaultFont", 9, "bold")).pack(side="left")
+
+        # 4. Close button
+        btn_bar = ttk.Frame(main_frame)
+        btn_bar.grid(row=4, column=0, sticky="ew")
+        ttk.Button(btn_bar, text="Close", command=self.destroy).pack(side="right")
+
+
+class RecipeGeneratorDialog(tk.Toplevel):
+    """
+    Interactive modal dialog for the Hybrid Recipe Generation Pipeline:
+    - Slot Architecture (Culinary Archetypes)
+    - Food Pairing Graph (Harmony & Hard Exclusions)
+    - ILP/CSP Optimizer (Exact dosages, macro targets, and FIFO pantry priority)
+    Supports headless non-blocking mode (wait=False) for automated testing.
+    """
+
+    ARCHETYPE_OPTIONS = [
+        "Auto (Default)",
+        "Grain / Pasta Dish",
+        "Main & Side Plate",
+        "One-Pot Balanced Bowl",
+        "Breakfast / Snack Bowl",
+    ]
+
+    MEAL_OPTIONS = ["lunch", "dinner", "breakfast"]
+
+    def __init__(
+        self,
+        master=None,
+        db_path: Optional[str] = None,
+        wait: bool = True,
+        on_save_callback=None,
+        auto_generate: bool = True,
+    ):
+        super().__init__(master)
+        self.title("Generate Recipe (Slot + Pairing + LP Solver)")
+        if master:
+            self.transient(master)
+        self.resizable(True, True)
+        self.minsize(720, 580)
+        self.db_path = db_path
+        self._wait = wait
+        self.on_save_callback = on_save_callback
+        self._variation_index = 0
+        self.current_candidate = None
+        self.saved_outcome: Optional[Dict[str, Any]] = None
+
+        # State variables
+        self.v_meal = tk.StringVar(value="lunch")
+        self.v_archetype = tk.StringVar(value=self.ARCHETYPE_OPTIONS[0])
+        self.v_target_kcal = tk.StringVar(value=str(int(self._fetch_default_kcal("lunch"))))
+        self.v_pantry_only = tk.BooleanVar(value=True)
+        self.v_title = tk.StringVar(value="")
+        self.v_meta = tk.StringVar(value="Select parameters and click Generate.")
+        self.v_macros = tk.StringVar(value="Per-serving macros: -")
+
+        self._init_ui()
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.bind("<Escape>", lambda e: self.cancel())
+        self.bind("<Control-Return>", lambda e: self.save())
+        self.bind("<Control-s>", lambda e: self.save())
+        self.bind("<Control-S>", lambda e: self.save())
+
+        if auto_generate:
+            self.generate_proposal(show_errors=False)
+
+        _center_and_lift(self, master)
+
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+
+        if wait:
+            self.wait_window(self)
+
+    @contextlib.contextmanager
+    def _get_conn(self):
+        from meal_planner.db.connection import get_connection
+        conn = get_connection(self.db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _fetch_default_kcal(self, meal_type: str) -> float:
+        from meal_planner.generator.pipeline import get_default_target_kcal
+        try:
+            with self._get_conn() as conn:
+                return get_default_target_kcal(conn, meal_type)
+        except Exception:
+            return 700.0
+
+    def _on_meal_changed(self, _event=None):
+        meal = self.v_meal.get().strip().lower()
+        default_kcal = self._fetch_default_kcal(meal)
+        self.v_target_kcal.set(str(int(default_kcal)))
+        self._variation_index = 0
+
+    def _init_ui(self):
+        main_frame = ttk.Frame(self, padding=14)
+        main_frame.pack(fill="both", expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(2, weight=1)
+
+        # 1. Top Parameters Frame
+        params_frame = ttk.LabelFrame(main_frame, text="Generation Parameters", padding=10)
+        params_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        for col in range(5):
+            params_frame.columnconfigure(col, weight=1 if col in (1, 3) else 0)
+
+        ttk.Label(params_frame, text="Meal:").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=4)
+        self.cb_meal = ttk.Combobox(
+            params_frame,
+            textvariable=self.v_meal,
+            values=self.MEAL_OPTIONS,
+            state="readonly",
+            width=14,
+        )
+        self.cb_meal.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=4)
+        self.cb_meal.bind("<<ComboboxSelected>>", self._on_meal_changed)
+
+        ttk.Label(params_frame, text="Archetype:").grid(row=0, column=2, sticky="w", padx=(0, 6), pady=4)
+        self.cb_archetype = ttk.Combobox(
+            params_frame,
+            textvariable=self.v_archetype,
+            values=self.ARCHETYPE_OPTIONS,
+            state="readonly",
+            width=24,
+        )
+        self.cb_archetype.grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=4)
+        self.cb_archetype.bind("<<ComboboxSelected>>", lambda e: setattr(self, "_variation_index", 0))
+
+        ttk.Label(params_frame, text="Target kcal:").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=4)
+        self.e_target_kcal = ttk.Entry(params_frame, textvariable=self.v_target_kcal, width=10)
+        self.e_target_kcal.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=4)
+
+        self.chk_pantry_only = ttk.Checkbutton(
+            params_frame,
+            text="Pantry Only (prioritize opened & near-expiry FIFO)",
+            variable=self.v_pantry_only,
+        )
+        self.chk_pantry_only.grid(row=1, column=2, columnspan=2, sticky="w", pady=4)
+
+        self.btn_generate = ttk.Button(
+            params_frame,
+            text="✨ Generate",
+            command=self.generate_proposal,
+        )
+        self.btn_generate.grid(row=0, column=4, rowspan=2, sticky="ns", padx=(8, 0), pady=2)
+
+        # 2. Recipe Title & Metadata Frame
+        title_frame = ttk.LabelFrame(main_frame, text="Proposed Recipe", padding=10)
+        title_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        title_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(title_frame, text="Recipe Name:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.e_title = ttk.Entry(title_frame, textvariable=self.v_title, font=("TkDefaultFont", 10, "bold"))
+        self.e_title.grid(row=0, column=1, sticky="ew")
+
+        ttk.Label(
+            title_frame,
+            textvariable=self.v_meta,
+            font=("TkDefaultFont", 8),
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        # 3. Ingredients & Preparation Notes Split
+        center_frame = ttk.Frame(main_frame)
+        center_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
+        center_frame.columnconfigure(0, weight=1)
+        center_frame.rowconfigure(0, weight=3)
+        center_frame.rowconfigure(1, weight=2)
+
+        ing_frame = ttk.LabelFrame(center_frame, text="Optimized Ingredients (1 serving)", padding=8)
+        ing_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
+        ing_frame.columnconfigure(0, weight=1)
+        ing_frame.rowconfigure(0, weight=1)
+
+        cols = ("name", "role", "quantity", "unit", "to_taste", "status")
+        self.t_ingredients = ttk.Treeview(ing_frame, columns=cols, show="headings", height=6)
+        self.t_ingredients.heading("name", text="Ingredient")
+        self.t_ingredients.heading("role", text="Slot / Role")
+        self.t_ingredients.heading("quantity", text="Quantity")
+        self.t_ingredients.heading("unit", text="Unit")
+        self.t_ingredients.heading("to_taste", text="To taste (q.b.)")
+        self.t_ingredients.heading("status", text="Pantry Status")
+
+        self.t_ingredients.column("name", width=190, anchor="w")
+        self.t_ingredients.column("role", width=120, anchor="w")
+        self.t_ingredients.column("quantity", width=80, anchor="e")
+        self.t_ingredients.column("unit", width=60, anchor="center")
+        self.t_ingredients.column("to_taste", width=95, anchor="center")
+        self.t_ingredients.column("status", width=120, anchor="center")
+
+        sb = ttk.Scrollbar(ing_frame, orient="vertical", command=self.t_ingredients.yview)
+        self.t_ingredients.configure(yscrollcommand=sb.set)
+        self.t_ingredients.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+
+        ttk.Label(
+            ing_frame,
+            text="ℹ️ 'To taste' (q.b. / quanto basta): discretionary seasoning added to taste (e.g. herbs, spices, grated cheese).",
+            font=("TkDefaultFont", 8, "italic"),
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        # Preparation Steps
+        notes_frame = ttk.LabelFrame(center_frame, text="Synthesized Preparation Steps (Editable)", padding=8)
+        notes_frame.grid(row=1, column=0, sticky="nsew")
+        notes_frame.columnconfigure(0, weight=1)
+        notes_frame.rowconfigure(0, weight=1)
+
+        self.txt_notes = tk.Text(notes_frame, height=4, wrap="word", font=("TkDefaultFont", 9))
+        notes_sb = ttk.Scrollbar(notes_frame, orient="vertical", command=self.txt_notes.yview)
+        self.txt_notes.configure(yscrollcommand=notes_sb.set)
+        self.txt_notes.grid(row=0, column=0, sticky="nsew")
+        notes_sb.grid(row=0, column=1, sticky="ns")
+
+        # 4. Macro Summary Bar
+        macro_frame = ttk.Frame(main_frame)
+        macro_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(macro_frame, textvariable=self.v_macros, font=("TkDefaultFont", 9, "bold")).pack(side="left")
+
+        # 5. Bottom Action Bar
+        btn_bar = ttk.Frame(main_frame)
+        btn_bar.grid(row=4, column=0, sticky="ew")
+        self.btn_regenerate = ttk.Button(
+            btn_bar,
+            text="🎲 Regenerate / Try Another",
+            command=self.regenerate_proposal,
+        )
+        self.btn_regenerate.pack(side="left")
+
+        ttk.Button(btn_bar, text="Cancel", command=self.cancel).pack(side="right", padx=(6, 0))
+        self.btn_save = ttk.Button(btn_bar, text="💾 Save to Recipes", command=self.save)
+        self.btn_save.pack(side="right")
+
+    def generate_proposal(self, show_errors: bool = True) -> bool:
+        """Runs the hybrid generator pipeline and populates the preview UI."""
+        from meal_planner.generator import RecipeGenerator
+
+        meal_type = (self.v_meal.get() or "lunch").strip().lower()
+        arch_sel = (self.v_archetype.get() or "").strip()
+        archetype_name = None if (not arch_sel or arch_sel.startswith("Auto")) else arch_sel
+        pantry_only = bool(self.v_pantry_only.get())
+
+        try:
+            raw_kcal = self.v_target_kcal.get().strip()
+            target_kcal = float(raw_kcal.replace(",", ".")) if raw_kcal else None
+            if target_kcal is not None and (not math.isfinite(target_kcal) or target_kcal <= 0):
+                raise ValueError("Target kcal must be a positive number.")
+        except ValueError as exc:
+            self.last_error = str(exc)
+            if show_errors and self._wait:
+                messagebox.showerror("Invalid Input", str(exc), parent=self)
+            return False
+
+        try:
+            gen = RecipeGenerator(db_path=self.db_path)
+            try:
+                candidate = gen.generate_recipe(
+                    target_kcal=target_kcal,
+                    meal_type=meal_type,
+                    archetype_name=archetype_name,
+                    pantry_only=pantry_only,
+                    db_path=self.db_path,
+                    variation_index=self._variation_index,
+                )
+            except ValueError:
+                if pantry_only:
+                    # Automatic fallback to catalog suggestions if pantry lacks required slot
+                    candidate = gen.generate_recipe(
+                        target_kcal=target_kcal,
+                        meal_type=meal_type,
+                        archetype_name=archetype_name,
+                        pantry_only=False,
+                        db_path=self.db_path,
+                        variation_index=self._variation_index,
+                    )
+                    candidate.warnings.append(
+                        "Some required slots were missing in pantry; included catalog suggestions."
+                    )
+                else:
+                    raise
+        except Exception as exc:
+            self.last_error = str(exc)
+            if show_errors and self._wait:
+                messagebox.showerror("Generation Error", str(exc), parent=self)
+            return False
+
+        self.last_error = None
+        self.current_candidate = candidate
+        self._populate_candidate(candidate)
+        return True
+
+    def regenerate_proposal(self) -> bool:
+        """Advances the variation index to propose an alternative combination."""
+        self._variation_index += 1
+        return self.generate_proposal(show_errors=True)
+
+    def _populate_candidate(self, candidate):
+        self.v_title.set(candidate.title)
+        warn_str = f"  |  ⚠️ {candidate.warnings[0]}" if candidate.warnings else ""
+        self.v_meta.set(
+            f"Archetype: {candidate.archetype_name}  |  Meal: {candidate.meal_type.capitalize()}  |  "
+            f"Solver: {candidate.solver_status}  |  Caloric delta: {candidate.caloric_delta_pct:.1f}%{warn_str}"
+        )
+
+        for iid in self.t_ingredients.get_children():
+            self.t_ingredients.delete(iid)
+
+        for ing in candidate.ingredients:
+            qty, unit = ing.calculate_display_quantity()
+            role_label = ing.role.value if hasattr(ing.role, "value") else str(ing.role)
+            qb_str = "Yes" if ing.to_taste else "No"
+            if ing.is_missing:
+                status_str = "Missing (To buy)"
+            elif ing.is_open:
+                status_str = "Opened (FIFO)"
+            else:
+                status_str = "In pantry"
+            self.t_ingredients.insert(
+                "",
+                "end",
+                values=(ing.name, role_label, f"{qty:g}", unit, qb_str, status_str),
+            )
+
+        self.txt_notes.delete("1.0", "end")
+        self.txt_notes.insert("1.0", candidate.notes or "")
+
+        self.v_macros.set(
+            f"Per-serving values: {candidate.total_kcal:.0f} kcal (Target: {candidate.target_kcal:.0f} kcal)  |  "
+            f"Prot: {candidate.total_protein:.1f}g  |  Carbs: {candidate.total_carbs:.1f}g  |  "
+            f"Fat: {candidate.total_fat:.1f}g  |  Fiber: {candidate.total_fiber:.1f}g"
+        )
+
+    def save(self) -> bool:
+        """Persists the generated recipe to SQLite RECIPES via create_recipe."""
+        from meal_planner import recipes as rc
+
+        if self.current_candidate is None:
+            if not self.generate_proposal(show_errors=True):
+                return False
+
+        title = self.v_title.get().strip()
+        if not title:
+            messagebox.showerror("Missing Recipe Name", "Please enter a name for the recipe.", parent=self)
+            return False
+
+        notes = self.txt_notes.get("1.0", "end-1c").strip()
+        meal_type = (self.v_meal.get() or self.current_candidate.meal_type or "lunch").strip().lower()
+
+        kwargs = self.current_candidate.to_create_recipe_kwargs()
+        kwargs["name"] = title
+        kwargs["meals"] = [meal_type]
+        kwargs["notes"] = notes
+
+        try:
+            with self._get_conn() as conn:
+                outcome = rc.create_recipe(conn, **kwargs)
+        except Exception as exc:
+            self.last_error = str(exc)
+            if self._wait:
+                messagebox.showerror("Save Error", str(exc), parent=self)
+            return False
+
+        outcome["Name"] = title
+        self.saved_outcome = outcome
+        if callable(self.on_save_callback):
+            self.on_save_callback(outcome)
+        self.destroy()
+        return True
+
+    def cancel(self):
+        self.saved_outcome = None
+        self.destroy()
+
+
 

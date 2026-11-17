@@ -5,10 +5,12 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import threading
 import tkinter as tk
+from typing import Optional
 
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
@@ -37,6 +39,8 @@ from meal_planner.gui.dialogs import (
     ProfileSetupDialog,
     AddRecipeDialog,
     QuickProductDialog,
+    RecipeDetailsDialog,
+    RecipeGeneratorDialog,
 )
 from meal_planner.planner.storage import schedule_meal_prep
 from meal_planner.engine.profile import bmi, estimates, reset_profile, set_meal_shares, update_profile
@@ -88,10 +92,11 @@ class App(BaseTk):
         self.nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         for title, build in (("Pantry", self.tab_pantry), ("Shopping", self.tab_shopping),
                              ("Recipes", self.tab_recipes), ("Plan", self.tab_plan),
-                             ("Profilo", self.tab_profile), ("Setting", self.tab_settings)):
+                             ("Profile", self.tab_profile), ("Settings", self.tab_settings)):
             tab = ttk.Frame(self.nb, padding=10)
             self.nb.add(tab, text=title)
             build(tab)
+        self.nb.select(0)
         self.bar = ttk.Label(self, textvariable=self.status, anchor="w", padding=6)
         self.bar.pack(fill="x")
         self.nb.bind("<<NotebookTabChanged>>", lambda e: self.on_tab_changed())
@@ -99,6 +104,7 @@ class App(BaseTk):
             self.load_profile_form(m.load_profile(c))
         self.refresh()
         self.set_theme(self.theme)
+        self.nb.select(0)
         self._startup_alert_timer = self.after(200, self._startup_expiration_alert)
 
     def destroy(self):
@@ -175,6 +181,7 @@ class App(BaseTk):
             on_delete=self._on_delete_inventory_row,
             on_select=self._on_edit_inventory_row,
             on_double_click=self._on_edit_inventory_row,
+            is_dark=(self.theme == "dark"),
         )
         self.t_disp.grid(row=0, column=1, sticky="nsew")
         ttk.Button(f, text="Export to .txt", command=self.export_inventory).grid(
@@ -324,44 +331,59 @@ class App(BaseTk):
         self.t_shopping.pack(fill="both", expand=True, pady=8)
 
     def tab_recipes(self, f):
-        f.columnconfigure(1, weight=1)
+        f.columnconfigure(0, weight=1)
         f.rowconfigure(1, weight=1)
-        ttk.Label(f, text="Macros per serving and feasibility with the current inventory "
-                          "('Open' = share taken from packages already open).").grid(row=0, column=1, sticky="w")
-        self.t_ric = Table(f, [("r", "Recipe", 200), ("k", "kcal", 50), ("p", "Prot", 50), ("c", "Carb", 50),
-                                 ("g", "Fat", 50), ("fi", "Fiber", 50), ("a", "Open", 55),
-                                 ("e", "Outcome", 220)], 18)
-        self.t_ric.grid(row=1, column=1, sticky="nsew", pady=8)
-        bar = ttk.Frame(f)
-        bar.grid(row=2, column=1, sticky="w")
-        self.btn_add_recipe = ttk.Button(bar, text="Nuova ricetta...", command=self.open_add_recipe_dialog)
-        self.btn_add_recipe.pack(side="left", padx=(0, 6))
-        ttk.Button(bar, text="Import from file (.json / .csv)...", command=self.import_recipes).pack(side="left")
-        ttk.Button(bar, text="Delete selected recipe", command=self.delete_recipe).pack(side="left", padx=6)
 
-        new = ttk.LabelFrame(f, text="New recipe (quantities for ONE serving)", padding=10)
-        new.grid(row=0, column=0, rowspan=3, sticky="n", padx=(0, 12))
+        # Header description
+        header_bar = ttk.Frame(f)
+        header_bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(
+            header_bar,
+            text="Macronutrients per serving and feasibility with current inventory "
+                 "('Open' = share from open packages). Double-click for details.",
+            font=("TkDefaultFont", 9),
+        ).pack(side="left")
+
+        # Full-width main recipes table
+        self.t_ric = Table(f, [
+            ("r", "Recipe", 240),
+            ("k", "kcal", 65),
+            ("p", "Prot", 65),
+            ("c", "Carb", 65),
+            ("g", "Fat", 65),
+            ("fi", "Fiber", 65),
+            ("a", "Open", 65),
+            ("e", "Feasibility / Outcome", 320),
+        ], 18, on_double_click=self._on_recipe_row_double_click)
+        self.t_ric.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
+
+        # Action toolbar below the table
+        bar = ttk.Frame(f)
+        bar.grid(row=2, column=0, sticky="ew")
+        self.btn_add_recipe = ttk.Button(bar, text="➕ New Recipe...", command=self.open_add_recipe_dialog)
+        self.btn_add_recipe.pack(side="left", padx=(0, 6))
+        self.btn_generate_recipe = ttk.Button(bar, text="✨ Generate Recipe...", command=self.open_recipe_generator_dialog)
+        self.btn_generate_recipe.pack(side="left", padx=6)
+        self.btn_details_recipe = ttk.Button(bar, text="👁️ Recipe Details...", command=self.open_recipe_details)
+        self.btn_details_recipe.pack(side="left", padx=6)
+        self.btn_import_recipes = ttk.Button(bar, text="📂 Import from file (.json / .csv)...", command=self.import_recipes)
+        self.btn_import_recipes.pack(side="left", padx=6)
+        self.btn_delete_recipe = ttk.Button(bar, text="🗑️ Delete Selected Recipe", command=self.delete_recipe)
+        self.btn_delete_recipe.pack(side="left", padx=6)
+
+        # Backward compatibility properties
         self.v_rnome = tk.StringVar()
-        ttk.Label(new, text="Name").grid(row=0, column=0, sticky="w")
-        ttk.Entry(new, textvariable=self.v_rnome, width=30).grid(row=0, column=1, sticky="ew", padx=(8, 0))
-        with db() as c:
-            self.v_meals = {n: tk.BooleanVar() for (n,) in c.execute("SELECT Name FROM MEALS ORDER BY Sort_Order")}
-        checkboxes = ttk.Frame(new)
-        checkboxes.grid(row=1, column=0, columnspan=2, sticky="w", pady=4)
-        ttk.Label(checkboxes, text="Meals:").pack(side="left", padx=(0, 6))
-        for name, var in self.v_meals.items():
-            ttk.Checkbutton(checkboxes, text=name, variable=var).pack(side="left", padx=(0, 6))
-        self.f_ing = Form(new, "Ingredient", [("p", "Product or group", []), ("q", "Quantity", None),
-                                                 ("u", "Unit", list(rc.UNITS))],
-                          "Add ingredient", self.add_ingredient)
-        self.f_ing.grid(row=2, column=0, columnspan=2, sticky="ew")
-        self.t_draft = Table(new, [("p", "Recipe ingredients", 160), ("q", "Quantity", 70),
-                                       ("u", "Unit", 70)], 5)
-        self.t_draft.grid(row=3, column=0, columnspan=2, pady=6)
-        ttk.Button(new, text="Remove selected ingredient",
-                   command=self.remove_ingredient).grid(row=4, column=0, columnspan=2, sticky="ew")
-        ttk.Button(new, text="Save recipe", command=self.save_recipe).grid(
-            row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.v_meals = {}
+
+    def _on_recipe_row_double_click(self, row_id):
+        """Handles double click on recipe table row by selecting and opening details."""
+        if not row_id:
+            return None
+        self.t_ric.tv.selection_set(row_id)
+        vals = self.t_ric.tv.item(row_id, "values")
+        if vals:
+            return self.open_recipe_details(recipe_name=vals[0], wait=False)
+        return None
 
     def tab_plan(self, f):
         top = ttk.Frame(f)
@@ -518,8 +540,8 @@ class App(BaseTk):
         ]
         c.create_polygon(points, fill=card_fill, outline=card_outline, width=2, smooth=True, tags=("overlay_card",))
 
-        # Exact verbatim Italian text required by Requirement R3
-        exact_text = "Ciao, aggiunti il tuo profilo per iniziare"
+        # Verbatim English text for empty-state overlay
+        exact_text = "Hello, add your profile to get started"
         c.create_text(
             (x1 + x2) / 2,
             y1 + card_h * 0.35,
@@ -530,7 +552,7 @@ class App(BaseTk):
             tags=("overlay_text", "overlay_card")
         )
 
-        sub_text = "Configura il tuo profilo per calcolare il fabbisogno calorico e iniziare a pianificare i pasti."
+        sub_text = "Set up your profile to calculate caloric needs and start planning meals."
         c.create_text(
             (x1 + x2) / 2,
             y1 + card_h * 0.54,
@@ -542,7 +564,7 @@ class App(BaseTk):
             tags=("overlay_card",)
         )
 
-        btn = ttk.Button(c, text="➕ Aggiungi profilo", command=self.open_profile_setup_dialog)
+        btn = ttk.Button(c, text="➕ Add Profile", command=self.open_profile_setup_dialog)
         c.create_window((x1 + x2) / 2, y1 + card_h * 0.76, window=btn, tags=("overlay_btn",))
 
         c.tag_bind("overlay_card", "<Button-1>", lambda e: self.open_profile_setup_dialog())
@@ -560,7 +582,7 @@ class App(BaseTk):
         if dialog.result:
             with db() as c:
                 self.load_profile_form(m.load_profile(c))
-            self.refresh(active_tab="Profilo")
+            self.refresh(active_tab="Profile")
 
     # ---------------- Setting tab (Requirement R2) ----------------
 
@@ -614,11 +636,11 @@ class App(BaseTk):
         self._build_sec_receipt_logs(self.f_sec_receipts)
         self._build_sec_destructive_actions(self.f_sec_destructive)
 
-        self.switch_settings_section("style_and_config")
+        self.switch_settings_section("style_and_config", select_tab=False)
 
-    def switch_settings_section(self, section: str):
+    def switch_settings_section(self, section: str, select_tab: bool = True):
         """Switches active section in Settings tab."""
-        if hasattr(self, "nb"):
+        if select_tab and hasattr(self, "nb"):
             for i in range(self.nb.index("end")):
                 if self.nb.tab(i, "text") in ("Setting", "Settings"):
                     try:
@@ -783,7 +805,7 @@ class App(BaseTk):
                 self.lbl_full_overview_text.insert(
                     "end",
                     "No user profile is currently configured.\n"
-                    "No profile metrics to display. Please configure your profile in the Profilo tab.\n"
+                    "No profile metrics to display. Please configure your profile in the Profile tab.\n"
                 )
                 self.lbl_full_overview_text.configure(state="disabled")
                 return
@@ -970,13 +992,18 @@ class App(BaseTk):
     # ---------------- refresh ----------------
 
     def refresh(self, active_tab=None):
-        if active_tab is None:
-            self._cached_recipe_rows = None
+        current_tab = None
+        if hasattr(self, "nb"):
+            try:
+                current_tab = self.nb.tab(self.nb.select(), "text")
+            except Exception:
+                current_tab = None
 
         if active_tab is not None and hasattr(self, "nb") and not getattr(self, "_syncing_tab", False):
-            target_title = "Profilo" if active_tab in ("Profile", "Profilo") else ("Setting" if active_tab in ("Setting", "Settings") else active_tab)
+            target_title = "Profile" if active_tab in ("Profile", "Profilo") else ("Settings" if active_tab in ("Setting", "Settings") else active_tab)
             for i in range(self.nb.index("end")):
-                if self.nb.tab(i, "text") == target_title:
+                tab_text = self.nb.tab(i, "text")
+                if tab_text == target_title or (target_title == "Profile" and tab_text == "Profilo") or (target_title == "Settings" and tab_text == "Setting"):
                     try:
                         cur_idx = self.nb.index(self.nb.select())
                     except Exception:
@@ -1003,7 +1030,8 @@ class App(BaseTk):
                 groups = [r[0] for r in c.execute("SELECT Name FROM SUBSTITUTE_GROUPS ORDER BY Name")]
                 if active_tab == "Recipes":
                     names = [r[0] for r in c.execute("SELECT Name FROM ALIASES ORDER BY Name")]
-                self.f_ing.w["p"]["values"] = names + groups
+                if hasattr(self, "f_ing") and self.f_ing:
+                    self.f_ing.w["p"]["values"] = names + groups
 
             # Pantry tab
             if active_tab in (None, "Pantry"):
@@ -1036,11 +1064,19 @@ class App(BaseTk):
                                      "ORDER BY Name").fetchall()
                 self.t_shopping.fill([((n, f"{q:.2f}", u), None) for n, q, u in shopping])
 
-            # Recipes tab (cached unless invalidated)
-            if active_tab in (None, "Recipes"):
-                if self._cached_recipe_rows is None:
+            # Recipes tab (lazy load / deferred if on other tabs)
+            target_tab = active_tab if active_tab is not None else current_tab
+            if target_tab == "Recipes":
+                if getattr(self, "_recipes_dirty", False) or self._cached_recipe_rows is None:
                     self._cached_recipe_rows = self.recipe_rows(c)
+                    self._recipes_dirty = False
                 self.t_ric.fill(self._cached_recipe_rows)
+            elif active_tab is None and not self.t_ric.tv.get_children() and self._cached_recipe_rows is None:
+                self._cached_recipe_rows = self.recipe_rows(c)
+                self._recipes_dirty = False
+                self.t_ric.fill(self._cached_recipe_rows)
+            else:
+                self._recipes_dirty = True
 
             # Profile tab
             if active_tab in (None, "Profile", "Profilo"):
@@ -1229,7 +1265,7 @@ class App(BaseTk):
                 else:
                     ok = v["sim"]["feasible"]
                     rows.append(((p["date_str"], v["meal"], v["recipe"], f"{v['macro']['Kcal']:.0f}",
-                                   "proposta: " + ("uses a leftover" if v["leftover"] else m.outcome(v["sim"], products, names))), None if ok else "ko"))
+                                   "proposed: " + ("uses a leftover" if v["leftover"] else m.outcome(v["sim"], products, names))), None if ok else "ko"))
         self.t_plan.fill(rows)
         self.write_text(summary.getvalue())
         self.msg("Plan proposed (not saved yet).")
@@ -1323,6 +1359,8 @@ class App(BaseTk):
 
     @safe
     def add_ingredient(self):
+        if not hasattr(self, "f_ing") or not self.f_ing:
+            return
         v = self.f_ing.read()
         if not v["p"] or not v["u"]:
             raise ValueError("Specify product (or group), quantity and unit.")
@@ -1331,10 +1369,13 @@ class App(BaseTk):
         self.show_draft()
 
     def show_draft(self):
-        self.t_draft.fill([((p, f"{q:g}", u), None) for p, q, u in self.draft])
+        if hasattr(self, "t_draft") and self.t_draft:
+            self.t_draft.fill([((p, f"{q:g}", u), None) for p, q, u in self.draft])
 
     @safe
     def remove_ingredient(self):
+        if not hasattr(self, "t_draft") or not self.t_draft:
+            return
         selection = self.t_draft.tv.selection()
         if selection:
             del self.draft[self.t_draft.tv.index(selection[0])]
@@ -1342,7 +1383,11 @@ class App(BaseTk):
 
     @safe
     def save_recipe(self):
+        if not hasattr(self, "v_rnome"):
+            return
         name = self.v_rnome.get().strip()
+        if not name:
+            return
         meals = [n for n, var in self.v_meals.items() if var.get()]
         with db() as c:
             outcome = rc.create_recipe(c, name, meals, self.draft)
@@ -1355,6 +1400,7 @@ class App(BaseTk):
         self.msg(f"Recipe '{name}' saved." + warning, bool(warning))
         self.refresh()
 
+    @safe
     def open_add_recipe_dialog(self, wait: bool = True):
         """Opens AddRecipeDialog modal for direct recipe creation."""
         db_path = getattr(self, "db_path", None)
@@ -1371,6 +1417,45 @@ class App(BaseTk):
     def add_recipe(self, wait: bool = True):
         """Alias for open_add_recipe_dialog."""
         return self.open_add_recipe_dialog(wait=wait)
+
+    @safe
+    def open_recipe_generator_dialog(self, wait: bool = True):
+        """Opens RecipeGeneratorDialog modal for hybrid slot + pairing + LP recipe generation."""
+        db_path = getattr(self, "db_path", None)
+        if not db_path and "MEAL_PLANNER_DB" in os.environ:
+            db_path = os.environ["MEAL_PLANNER_DB"]
+        dlg = RecipeGeneratorDialog(
+            self,
+            db_path=db_path,
+            wait=wait,
+            on_save_callback=self._on_recipe_dialog_saved,
+        )
+        return dlg
+
+    def _ensure_recipes_loaded(self):
+        with db() as c:
+            self._cached_recipe_rows = self.recipe_rows(c)
+            self._recipes_dirty = False
+            self.t_ric.fill(self._cached_recipe_rows)
+
+    @safe
+    def open_recipe_details(self, recipe_name: Optional[str] = None, wait: bool = True):
+        """Opens RecipeDetailsDialog to inspect ingredients, macros, and notes."""
+        if not recipe_name:
+            selection = self.t_ric.tv.selection()
+            if not selection:
+                children = self.t_ric.tv.get_children()
+                if children:
+                    self.t_ric.tv.selection_set(children[0])
+                    selection = (children[0],)
+                else:
+                    messagebox.showinfo("Recipe Details", "No recipes available in the table.", parent=self)
+                    return None
+            recipe_name = self.t_ric.tv.item(selection[0], "values")[0]
+        db_path = getattr(self, "db_path", None)
+        if not db_path and "MEAL_PLANNER_DB" in os.environ:
+            db_path = os.environ["MEAL_PLANNER_DB"]
+        return RecipeDetailsDialog(self, recipe_name=recipe_name, db_path=db_path, wait=wait)
 
     def _on_recipe_dialog_saved(self, outcome):
         """Callback invoked when a new recipe is saved through AddRecipeDialog."""
@@ -1501,10 +1586,20 @@ class App(BaseTk):
 
     # ---------------- receipt actions ----------------
 
+    @property
+    def _receipt_log_text(self) -> str:
+        if not hasattr(self, "_receipt_log_buffer"):
+            self._receipt_log_buffer = []
+        return "".join(self._receipt_log_buffer)
+
+    @_receipt_log_text.setter
+    def _receipt_log_text(self, val: str):
+        self._receipt_log_buffer = [val] if val else []
+
     def _receipt_log_write(self, text: str):
-        if not hasattr(self, "_receipt_log_text"):
-            self._receipt_log_text = ""
-        self._receipt_log_text += text
+        if not hasattr(self, "_receipt_log_buffer"):
+            self._receipt_log_buffer = []
+        self._receipt_log_buffer.append(text)
 
     def _on_receipt_drop(self, event):
         raw = (event.data or "").strip()
@@ -1546,23 +1641,25 @@ class App(BaseTk):
             try:
                 from meal_planner import receipts as rp
                 voci = rp.leggi_voci(path)
-                self.after(0, lambda: _done(voci, None))
+                self.after(0, lambda: self._on_receipt_read_completed(path, voci, None))
             except Exception as exc:
-                self.after(0, lambda: _done([], exc))
-
-        def _done(voci, error):
-            self._receipt_status.set("")
-            if error:
-                self.msg(f"OCR error: {error}", error=True)
-                self._receipt_log_write(f"  [ERROR] {error}\n\n")
-                messagebox.showerror("Receipt Error", str(error))
-                return
-            self.msg(f"Receipt parsed: {len(voci)} items found.")
-            self._receipt_log_write(f"  -> Successfully recognized {len(voci)} item(s).\n")
-            self._receipt_log_write("  -> Opening review modal...\n\n")
-            self._open_receipt_review(path, voci)
+                self.after(0, lambda: self._on_receipt_read_completed(path, [], exc))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_receipt_read_completed(self, path: str, voci, error):
+        self._receipt_status.set("")
+        if error:
+            err_str = str(error)
+            display_err = "Unable to load image" if "impossibile caricare l'immagine" in err_str.lower() else err_str
+            self.msg(f"OCR error: {error}", error=True)
+            self._receipt_log_write(f"  [ERROR] {error}\n\n")
+            messagebox.showerror("Receipt Error", display_err)
+            return
+        self.msg(f"Receipt parsed: {len(voci)} items found.")
+        self._receipt_log_write(f"  -> Successfully recognized {len(voci)} item(s).\n")
+        self._receipt_log_write("  -> Opening review modal...\n\n")
+        self._open_receipt_review(path, voci)
 
     def _open_receipt_review(self, path: str, voci):
         from datetime import datetime

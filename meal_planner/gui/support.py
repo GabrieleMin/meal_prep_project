@@ -27,9 +27,9 @@ def number(text, name="value"):
 
 def safe(function):
     """Shows the error to the user instead of letting the window close."""
-    def inner(self, *args):
+    def inner(self, *args, **kwargs):
         try:
-            return function(self, *args)
+            return function(self, *args, **kwargs)
         except Exception as e:
             self.msg(str(e), True)
             messagebox.showerror("Warning", str(e))

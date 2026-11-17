@@ -48,7 +48,13 @@ def plan_day(conn, date_str, kcal=None, inv=None, fixed=None, planned_cooks=None
     order = {name: i for i, (name, _) in enumerate(meals)}
     shares = {name: q / 100.0 for name, q in meals}
     recipe_names = dict(conn.execute("SELECT Recipe_ID, Name FROM RECIPES").fetchall())
-    ing = {rid: m.recipe_ingredients(conn, rid) for rid in recipe_names}
+    ing = {rid: [] for rid in recipe_names}
+    for r in conn.execute(
+        "SELECT Recipe_ID, ID, Group_ID, Quantity, Unit, To_Taste "
+        "FROM RECIPE_INGREDIENTS ORDER BY Recipe_ID, Row_ID"
+    ):
+        if r[0] in ing:
+            ing[r[0]].append({"ID": r[1], "Group_ID": r[2], "Quantity": r[3], "Unit": r[4], "To_Taste": r[5]})
     inv = (inv if inv is not None else m.VirtualInventory.from_db(conn)).copy()
     open_before = {i for i in inv.rows if inv.open_remainder(i) > 0}
     warnings = []

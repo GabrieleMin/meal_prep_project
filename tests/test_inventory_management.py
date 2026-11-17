@@ -646,7 +646,7 @@ class BaseAdversarialInventoryTestCase(unittest.TestCase):
         cls.root.withdraw()
 
         # Capture baseline inventory.db counts
-        cls.prod_db_path = os.path.abspath("inventory.db")
+        cls.prod_db_path = os.path.abspath("data/inventory.db")
         if os.path.exists(cls.prod_db_path):
             conn = sqlite3.connect(cls.prod_db_path)
             cur = conn.cursor()
@@ -2064,7 +2064,7 @@ class TestDiskDatabasePreservation(unittest.TestCase):
 
     def test_disk_inventory_db_counts(self):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        db_file = os.path.join(repo_root, "inventory.db")
+        db_file = os.path.join(repo_root, "data", "inventory.db")
         self.assertTrue(os.path.exists(db_file), f"Database file not found at {db_file}")
 
         conn = sqlite3.connect(db_file)
@@ -2129,7 +2129,7 @@ class BaseAdversarialTestCase(unittest.TestCase):
         cls.root.withdraw()
 
         # Capture baseline inventory.db counts
-        cls.prod_db_path = os.path.abspath("inventory.db")
+        cls.prod_db_path = os.path.abspath("data/inventory.db")
         if os.path.exists(cls.prod_db_path):
             conn = sqlite3.connect(cls.prod_db_path)
             cur = conn.cursor()
@@ -2752,8 +2752,8 @@ class TestProductionDatabasePreservation(unittest.TestCase):
     """
 
     def test_production_db_row_counts(self):
-        db_path = os.path.abspath("inventory.db")
-        self.assertTrue(os.path.exists(db_path), "inventory.db does not exist!")
+        db_path = os.path.abspath("data/inventory.db")
+        self.assertTrue(os.path.exists(db_path), "data/inventory.db does not exist!")
 
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
@@ -2829,7 +2829,7 @@ class BaseEmpiricalGateTestCase(unittest.TestCase):
         cls.root.withdraw()
 
         # Capture production DB counts
-        cls.prod_db = os.path.abspath("inventory.db")
+        cls.prod_db = os.path.abspath("data/inventory.db")
         if os.path.exists(cls.prod_db):
             conn = sqlite3.connect(cls.prod_db)
             c = conn.cursor()

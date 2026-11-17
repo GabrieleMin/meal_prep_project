@@ -1,109 +1,222 @@
 # Meal Planner
 
-Desktop application (Tkinter) to manage a pantry, store recipes and plan meals that respect nutritional
-limits while using already-opened packages first. Standard library only: Python 3.10+ (on Linux install the
-system package `python3-tk` if Tkinter is missing).
+**Meal Planner** is a 100% offline desktop application (`Tkinter` + `sv-ttk` + `SQLite`) for pantry management, receipt OCR ingestion, intelligent recipe generation, and multi-day nutritional meal planning with FIFO (First-In, First-Out) and opened-package prioritization.
 
-## Run
+---
 
-    python -m meal_planner          # opens the window; creates inventory.db in the project root on first start
+## Table of Contents
 
-The database path can be changed with the `MEAL_PLANNER_DB` environment variable.
+1. [Quick Start & CLI](#1-quick-start--cli)
+2. [Navigation & Application Tabs](#2-navigation--application-tabs)
+3. [Key Features & Functional Modules](#3-key-features--functional-modules)
+4. [Hybrid Recipe Generation Pipeline](#4-hybrid-recipe-generation-pipeline)
+5. [Project Layout](#5-project-layout)
+6. [Architecture & Performance Optimizations](#6-architecture--performance-optimizations)
+7. [Testing & Verification](#7-testing--verification)
+8. [Documentation](#8-documentation)
 
-## Getting started (tabs)
+---
 
-1. **Profile** - set sex, activity level and goal (daily kcal target).
-2. **Pantry** - add products (a new name asks for unit and values per 100 g) and consume quantities.
-3. **Recipes** - add recipes with the form or import `.json` / `.csv` files; delete unused ones.
-4. **Plan** - *Propose plan*, *Save plan*, then *Mark as cooked* (number of servings: extra servings become
-   leftovers). Meals can be locked to a recipe or skipped.
-5. **Shopping** - what is missing (consumption beyond availability + ingredients of the plan).
+## 1. Quick Start & CLI
 
-Meals are `breakfast`, `lunch`, `dinner`. Units: `kg`, `L`, `pcs` for products; `g`, `kg`, `ml`, `L`, `pcs`, `tbsp`, `tsp` in recipes.
+### Launch the GUI Application
 
-### Recipe import (quantities are per ONE serving)
+```bash
+python -m meal_planner          # Opens on the Pantry tab; uses data/inventory.db
+```
 
-    JSON: [{"name": "Chicken and rice", "meals": ["lunch", "dinner"],
-            "ingredients": [{"product": "Rice", "quantity": 100, "unit": "g"}]}]
-    CSV (";" or ","): recipe;meals;product;quantity;unit;to_taste        (meals separated by "|")
+The database is stored exclusively in `data/inventory.db` and can be overridden via the `MEAL_PLANNER_DB` environment variable.
 
-## Project layout
+### Setup, Demo Seeding & Test Suite
 
-    meal_planner/
-      db/           connection.py, schema.py (consolidated schema, migrations, views, defaults), recipe_schema.py
-      engine/       catalog (read data), nutrition (conversions, macros, limit checks),
-                    virtual_inventory (in-memory simulation), profile, constants, cli
-      planner/      day (daily planner), week (multi-day), storage (save plans, shopping list, "cooked"), cli
-      receipts/     reader.py, pipeline.py (receipt OCR parsing and reconciliation pipeline)
-      inventory.py  add / consume items, availability, shopping list
-      recipes.py    create, import, delete recipes
-      gui/          app (main window), widgets, dialogs, support
-    scripts/        setup_project.py, demo_receipt.py, seed_inventory.py, seed_recipes.py (demo data), build_extensions.py
-    tests/          6 consolidated suites: test_domain_core, test_receipts_and_reconciliation, test_inventory_management, test_recipe_management, test_settings_and_profile, test_e2e_and_invariants
+```bash
+python -m scripts.setup_project              # First-time setup (creates schema & demo data if absent)
+python -m scripts.setup_project --test       # Verifies DB integrity and runs all test suites on isolated DBs
+python -m scripts.setup_project --reset -y   # Wipes and reloads baseline demo products, inventory & recipes
+python -m scripts.setup_project --launch     # Runs setup and launches the GUI window
+```
 
-## Command line (optional)
+### Receipt Pipeline Demo Launcher
 
-    python -m meal_planner.engine profile --sex M --activity moderate --goal maintenance
-    python -m meal_planner.engine recipes
-    python -m meal_planner.engine day "Yogurt, apple and milk" "Tomato spaghetti" "Chicken and rice" --kcal 2500
-    python -m meal_planner.planner day --kcal 2000 --lock lunch="Chicken and rice" --skip dinner --save
-    python -m meal_planner.planner week --start 2026-10-26 --days 7 --save
-    python -m meal_planner.planner shopping
-    python -m meal_planner.recipes import recipes.json
+```bash
+python -m scripts.demo_receipt --drop        # Launches GUI and simulates drag-and-drop receipt upload
+python -m scripts.demo_receipt --reconcile   # Opens ReceiptReconciliationDialog directly with sample items
+```
 
-## Development
+### Optional Command-Line Interface
 
-    python -m scripts.setup_project --test      # database, demo data, integrity check, all test suites
-    python -m scripts.setup_project --reset -y  # wipe and reload demo data
+```bash
+python -m meal_planner.engine profile --sex M --activity moderate --goal maintenance
+python -m meal_planner.engine recipes
+python -m meal_planner.engine day "Yogurt, apple and milk" "Tomato spaghetti" "Chicken and rice" --kcal 2500
+python -m meal_planner.planner day --kcal 2000 --lock lunch="Chicken and rice" --skip dinner --save
+python -m meal_planner.planner week --start 2026-10-26 --days 7 --save
+python -m meal_planner.planner shopping
+python -m meal_planner.recipes import recipes.json
+```
 
-## Features Implemented
+---
 
-* **Advance Meal Prep Scheduling:** Schedule multi-serving cooks and assign future leftovers to targeted dates via `schedule_meal_prep()` and `MealPrepDialog`.
-* **Ingredient Variety Constraint:** Prevents identical recipe and ingredient repetitions across adjacent meals and scheduled prep days within `No_repeat_days`.
-* **Expiring Food Priority:** Ranks candidate recipes with a `(1.0 / min_days)` score bonus to prioritize pantry items closest to expiration.
-* **Multi-Day Expiration & Exclusion List:** Filters out expired stock using the `EXCLUSION_LIST` table and date penalties during meal plan generation.
-* **Startup Expired Items Alert:** Displays a non-blocking startup dialog listing expired food items that should be discarded.
-* **Expiration Date Tracking & Visual Indicators:** ISO `YYYY-MM-DD` tracking with color-coded Treeview shelf-life badges (red: expired, orange: $\le$ 3 days, yellow: $\le$ 7 days).
-* **Storage Location Management:** Full CRUD operations and foreign key safety for storage zones via the `LOCATIONS` table and interactive dialogs.
-* **Embedded Receipt Management:** Sidebar upload area with Drag & Drop (`tkinterdnd2`), native file browser, and real-time parser log console.
-* **Two-Step Receipt Ingestion Pipeline:** OCR raw review (`FinestraModifica`) followed by interactive catalog reconciliation (`ReceiptReconciliationDialog`) for atomic SQLite insertion.
+## 2. Navigation & Application Tabs
 
-### Code Refactoring, Cleanup & Pipeline Hardening
+The interface is localized **100% in English**, opens by default on the **Pantry** tab, and supports both persistent default themes (`Settings`) and instant session-level **Dark ⇄ Light mode** toggling from the header bar:
 
-* **Package Internalization (`meal_planner/receipts/`):** Migrated receipt OCR and review logic from the external `features_development/` directory into a clean internal package (`reader.py`, `pipeline.py`, `__init__.py`). Completely eliminated dynamic `sys.path.insert` hacks across GUI, configuration, and test suites, and deleted `features_development/`.
-* **Legacy Code & Artifact Removal:** Deleted `scripts/migrate_legacy_db.py`, removed obsolete `inventario.db` checks from `meal_planner/__main__.py`, and purged orphaned `.pyc` files from root `__pycache__`.
-* **Consolidated Database Schema (`meal_planner/db/schema.py`):** Unified all 18 tables, 10 B-tree indices, 3 views (`SHOPPING_LIST_VIEW`, `INGREDIENT_GRAMS_VIEW`, `RECIPE_MACROS_VIEW`), defaults, and migrations into a single idempotent module; refactored `recipe_schema.py` into a backward-compatible proxy.
-* **Cross-Dimensional Unit Normalization:** Extended `convert_receipt_quantity_unit()` with `grams_per_piece` and `density_kg_per_l` to support bidirectional conversions (`pcs` $\leftrightarrow$ `kg`, `L` $\leftrightarrow$ `kg`, `pcs` $\leftrightarrow$ `L`), preventing raw piece counts from being mistakenly stored as kilograms in `ReceiptReconciliationDialog`.
-* **Ingestion & Numerical Hardening:** Protected `map_receipt_item_to_add_item_args()` against `OverflowError` on infinite/exponential package values; added `None` guards and integer-float string parsing (`"1.0"`) to `valida_voci()`; enforced `math.isfinite()` bounds on weights/macros and strictly typed integer `intact_items` in `add_item()`, cleanly isolating SQLite `NOT NULL` violations from `AliasConflict`.
+1. **Pantry** — View and manage inventory stock with color-coded expiration badges, per-row soft-coral delete buttons (`X`), double-click editing (`InventoryItemEditDialog`), storage location management (`LOCATIONS`), and drag-and-drop receipt OCR ingestion.
+2. **Shopping** — Displays missing quantities required by the active meal plan or consumed beyond available stock (`SHOPPING_LIST_VIEW`).
+3. **Recipes** — Full-width recipe table showing per-serving macronutrients (`kcal`, `Prot`, `Carb`, `Fat`, `Fiber`), open-package share (`Open`), and stock feasibility:
+   - `➕ New Recipe...` (`AddRecipeDialog`): keyboard-driven entry (`Enter` chaining, `Delete` removal, `Ctrl+S` / `Ctrl+Enter` save), multi-serving scaling (`Servings`), preparation notes, `"To taste (q.b.)"` support, and on-the-fly product registration (`QuickProductDialog`).
+   - `✨ Generate Recipe...` (`RecipeGeneratorDialog`): deterministic hybrid recipe generator combining culinary slots, food pairing, and linear programming (`scipy.optimize.linprog`).
+   - `👁️ Recipe Details...` (`RecipeDetailsDialog`) or double-click any row: non-destructive inspection of meals, notes, ingredients, and live macros from `RECIPE_MACROS_VIEW`.
+   - `📂 Import from file (.json / .csv)...` and `🗑️ Delete Selected Recipe`.
+4. **Plan** — Propose daily or multi-day meal plans (*Propose plan*, *Save plan*, *Mark as cooked*, *Schedule Meal Prep*), lock specific meals, or skip meals while respecting variety and shelf-life priority.
+5. **Profile** — Dynamic weight log, BMI calculation, metabolic estimates (BMR, maintenance, caloric target), and an interactive debounced weight history chart (`LineChart`). Displays a clean rounded empty-state overlay (`"Hello, add your profile to get started"`) with `ProfileSetupDialog` when no profile is configured.
+6. **Settings** — Non-monolithic 4-section controller:
+   - **Style & Config**: Default startup theme (`dark` / `light`), expiration warning days, and receipt output directory stored in SQLite `APP_SETTINGS`.
+   - **Full Profile**: Static metrics (sex, height) and complete read-only nutritional summary.
+   - **Receipt Logs**: Audit history of processed receipts (`RECEIPT_LOGS`).
+   - **Destructive Actions**: Confirmation-guarded *Hard-Delete Entire Inventory* and *Reset User Profile*.
 
-## Code Optimizations & Native C Extensions
+---
 
-To maximize planner throughput and responsiveness, several performance bottlenecks were identified, profiled, and eliminated:
+## 3. Key Features & Functional Modules
 
-1. **Native C Speedups Extension (`_speedups.c`):**
-   - Implemented `round_down_to_hundredth` in C (`c_round_down`) for high-speed rounding during stock consumption, achieving a **4.5x - 8.3x speedup** over pure Python.
-   - Implemented `sum_macros` in C (`py_sum_macros`) with single-pass struct/vector aggregation and interned Python Unicode strings, achieving a **5.7x - 6.9x speedup** over Python dictionary comprehensions.
-   - Implemented `score` in C (`py_score`) for fast evaluation of candidate meals in `meal_planner/planner/day.py`.
-   - Created `scripts/build_extensions.py` for automated compilation into `meal_planner/engine/_speedups.so`, with transparent, 100% backward-compatible pure-Python fallbacks when the C extension is not compiled.
+* **Interactive Pantry Row Editing & Macro Disambiguation (`InventoryItemEditDialog` & `MacroPromptDialog`):**
+  Double-clicking any pantry row edits stock quantities, locations, expiration dates, conversion factors (`Grams_per_piece`, `Density_kg_per_L`), and 100g nutritional profiles. If modified macros affect shared aliases or recipes, `MacroPromptDialog` lets the user choose between:
+  - **Option 1 (Isolate to this item only):** Creates a dedicated `Product_ID` for the single item.
+  - **Option 2 (Propagate globally):** Updates the shared `PRODUCTS` record across all linked items and recipes.
+* **4x Supersampled Anti-Aliased Delete Badges:**
+  Custom Pillow-rendered rounded delete icons (`create_delete_icon`) using 4x Lanczos supersampling and a WCAG-compliant soft coral/rose palette (`#2d1f22` / `#f87171` in Dark mode; `#fbebec` / `#c94a53` in Light mode) with automatic Tcl token propagation across theme switches.
+* **Two-Step Receipt OCR & Catalog Reconciliation Pipeline (`meal_planner/receipts/`):**
+  Drag-and-drop or browse receipt images $\to$ OCR review (`FinestraModifica`) $\to$ interactive catalog matching (`ReceiptReconciliationDialog`) with cross-dimensional unit conversion (`pcs` $\leftrightarrow$ `kg` $\leftrightarrow$ `L`) and atomic SQLite commits.
+* **Advance Meal Prep & Leftover Scheduling:**
+  Schedule multi-serving cooks via `schedule_meal_prep()` and `MealPrepDialog`, tracking leftover servings in `COOKINGS` and enforcing ingredient variety (`No_repeat_days`) and expiring-stock priority (`EXCLUSION_LIST`).
 
-2. **Copy-on-Write (COW) VirtualInventory:**
-   - In `meal_planner/engine/virtual_inventory.py`, replaced full recursive deep copies with lazy Copy-on-Write semantics. `copy()` performs an instantaneous shallow dictionary copy, and row lists are cloned only upon calling `consume()` for the specific modified product ID.
-   - Reduced tree search memory churn and achieved a **20.8x - 24.2x speedup** (from ~68 ms down to ~2.8 ms per 10,000 branch copies).
+### Recipe Import Formats (per 1 serving)
 
-3. **Database Connection Reuse:**
-   - Modified `get_exclusion_list` in `meal_planner/inventory.py` to accept an optional active SQLite connection `conn=conn`.
-   - Wired `conn=conn` into `plan_day()` in `meal_planner/planner/day.py`, eliminating repeated file opens, locking, and disk sync overhead for a **14.6x - 24.8x speedup** per query.
+```json
+[{"name": "Chicken and rice", "meals": ["lunch", "dinner"],
+  "ingredients": [{"product": "Rice", "quantity": 100, "unit": "g"}]}]
+```
 
-4. **Planner Macro Memoization:**
-   - Added an in-memory `_macro_cache` dictionary within `plan_day()` in `meal_planner/planner/day.py` keyed by `(Recipe_ID, group_choices)`.
-   - Reused precomputed macronutrient breakdowns across both `preselection()` and recursive `explore()` calls, eliminating redundant nutritional recalculations.
+```text
+CSV (";" or ","): recipe;meals;product;quantity;unit;to_taste        (meals separated by "|")
+```
 
-5. **SQLite B-Tree Indexing:**
-   - Added database indexes `idx_inventory_expiration` on `INVENTORY(Expiration_Date)`, `idx_inventory_product_loc` on `INVENTORY(ID, Location)`, `idx_plan_date_status` on `PLAN(Date, Status)`, and `idx_cookings_date` on `COOKINGS(Cooking_Date)` in `meal_planner/db/schema.py` and `meal_planner/db/recipe_schema.py`.
-   - Converted full table scans into indexed B-tree lookups for near-instant query execution.
+---
 
-6. **Accelerated Receipt OCR Matching:**
-   - In `meal_planner/receipts/reader.py`, integrated C++ `rapidfuzz.fuzz.ratio` with standard library `difflib` fallback, accelerating string similarity checks during receipt reconciliation.
+## 4. Hybrid Recipe Generation Pipeline
 
-7. **Verification & Benchmark Test Suite:**
-   - Consolidated into `tests/test_domain_core.py` (`TestOptimizationBenchmarks`) containing automated verification tests for C vs. Python numerical equivalence, Copy-on-Write state isolation, and runtime speedup assertions across all optimized components.
+The [`meal_planner/generator/`](meal_planner/generator/) package synthesizes complete, nutritionally balanced recipes **100% offline** through a 3-stage architecture:
+
+1. **Two-Tier Taxonomy & Culinary Slot Grammar (`taxonomy.py`, `slots.py`):**
+   - **Tier A (Canonical Semantic Dictionary)** + **Tier B (Automated Macro Fingerprinting)**: classifies any known or custom user product into culinary roles (`CARB_BASE`, `PROTEIN_MAIN`, `VEGETABLE`, `FAT_SEASONING`, `DAIRY_BASE`, `FRUIT`, `AROMA_TASTE`) with multi-role eligibility (e.g. *Parmigiano Reggiano* as finishing aroma or main protein; *Eggs* as protein or binder).
+   - **4 Structured Archetypes**: `Grain / Pasta Dish`, `Main & Side Plate`, `One-Pot Balanced Bowl`, and `Breakfast / Snack Bowl`, each enforcing physiological portion bounds `[min_g, max_g]`.
+2. **Food Pairing Graph (`food_pairing.py`):**
+   - Enforces **17 hard mutual exclusion rules** (e.g. seafood with sweet dairy, cooking oils in sweet breakfast bowls, raw flour in cold dishes) and ranks combinations via a 4-tier flavor harmony matrix with `lru_cache` memoization.
+3. **ILP / CSP Mathematical Dosage Solver (`solver.py`, `pipeline.py`):**
+   - Solves exact gram dosages via `scipy.optimize.linprog(method='highs')` (with a pure-Python continuous knapsack fallback) to match target meal calories within $\pm 5\%$ while prioritizing opened packages (`Open_Remainder > 0`) and near-expiry FIFO stock.
+   - Synchronizes post-quantization display quantities (`quantized_grams()`) with SQLite `RECIPE_MACROS_VIEW` and synthesizes English recipe titles and 4-step cooking instructions.
+
+---
+
+## 5. Project Layout
+
+```text
+meal_planner_project/
+├── data/
+│   └── inventory.db              # Primary SQLite database
+├── docs/
+│   ├── GUIDA_FUNZIONAMENTO.md    # Comprehensive visual & architectural manual (14 sections)
+│   ├── STORICO_MODIFICHE.md      # Complete chronological engineering changelog (17 phases)
+│   └── images/                   # 16 automated headless UI screenshots
+├── meal_planner/
+│   ├── config.py                 # Thread-safe in-memory cached settings backed by APP_SETTINGS
+│   ├── inventory.py              # Pantry CRUD, FIFO consumption, locations, unit conversions
+│   ├── recipes.py                # Recipe creation, on-the-fly product registration, CSV/JSON import
+│   ├── db/
+│   │   ├── connection.py         # SQLite connection manager with WAL & directory caching
+│   │   ├── schema.py             # Unified idempotent schema (20 tables, views, triggers, indices)
+│   │   └── recipe_schema.py      # Backward-compatible schema facade
+│   ├── engine/
+│   │   ├── catalog.py            # Indexed product & alias loading
+│   │   ├── nutrition.py          # Factorized macro calculations & nutritional goal validation
+│   │   ├── virtual_inventory.py  # Copy-on-Write (COW) in-memory inventory simulation
+│   │   ├── profile.py            # BMR, BMI, caloric estimates & profile persistence
+│   │   └── _speedups.c           # Optional C extension for rounding, macro summation & scoring
+│   ├── generator/
+│   │   ├── taxonomy.py           # Two-tier food role classifier & macro fingerprinter
+│   │   ├── slots.py              # Culinary archetypes, slot cardinalities & portion bounds
+│   │   ├── food_pairing.py       # Flavor affinity graph & 17 hard mutual exclusions
+│   │   ├── solver.py             # SciPy HiGHS LP optimizer & pure-Python knapsack fallback
+│   │   └── pipeline.py           # End-to-end RecipeGenerator, titling & step synthesis
+│   ├── planner/
+│   │   ├── day.py                # Daily meal planner with bulk ingredient loading & memoization
+│   │   ├── week.py               # Multi-day planner with variety & expiration bonuses
+│   │   └── storage.py            # Plan persistence, shopping list sync & meal prep scheduling
+│   ├── receipts/
+│   │   ├── reader.py             # Pre-compiled regex OCR parser & fuzzy catalog matching
+│   │   └── pipeline.py           # Two-step receipt review & reconciliation pipeline
+│   └── gui/
+│       ├── app.py                # Main application window & lazy tab refresh controller
+│       ├── dialogs.py            # Modal dialogs (AddRecipe, RecipeDetails, RecipeGenerator, etc.)
+│       ├── widgets.py            # Custom Table (antialiased delete icon) & debounced LineChart
+│       ├── theme.py              # Dark/Light theme loader & palette definitions
+│       └── support.py            # @safe error decorator, DB context manager & numeric parser
+├── scripts/
+│   ├── setup_project.py          # Environment setup, DB integrity verifier & isolated test runner
+│   ├── demo_receipt.py           # Unified receipt drag-and-drop & reconciliation demo
+│   ├── capture_docs_screenshots.py # Automated headless screenshot generator for docs/images/
+│   ├── seed_inventory.py         # Demo products & inventory seeder
+│   ├── seed_recipes.py           # Demo recipes seeder
+│   └── build_extensions.py       # C extension builder for meal_planner/engine/_speedups.so
+└── tests/                        # 547 automated offline tests across 10 test modules
+```
+
+---
+
+## 6. Architecture & Performance Optimizations
+
+1. **In-Memory Configuration & SQLite Connection Caching (`config.py`, `db/connection.py`):**
+   - Thread-safe `_CACHED_CONFIG` turns `config.get()` into $O(1)$ memory lookups with atomic invalidation on write; directory verification (`_VERIFIED_DIRS`) and selective `PRAGMA journal_mode = WAL` eliminate redundant filesystem I/O.
+2. **Copy-on-Write (COW) `VirtualInventory` & Batched Writes (`engine/virtual_inventory.py`):**
+   - Lazy shallow dictionary copies clone row lists only on `consume()`, achieving a **20.8x – 24.2x speedup** during planner tree search, while `write()` batches updates via `conn.executemany()`.
+3. **Bulk SQL Queries & Factorized Nutrition Math (`planner/day.py`, `engine/nutrition.py`, `recipes.py`):**
+   - Eliminated $N+1$ query patterns in daily/weekly planning and recipe imports via single-pass bulk queries and `UNION ALL` existence checks; factorized `g / 100.0` scalar multiplications across all 8 macronutrients.
+4. **Memoized Food Pairing Graph & LP Solver (`generator/food_pairing.py`, `generator/solver.py`):**
+   - `@functools.lru_cache` on canonical token resolution, culinary tag extraction, and role inference enables 80-item pantry recipe generation in **< 0.15s**.
+5. **GUI Responsiveness & Lazy Evaluation (`gui/app.py`, `gui/widgets.py`, `gui/dialogs.py`):**
+   - Deferred recipe feasibility simulation (`_recipes_dirty`) until the user views the `Recipes` tab; `after_idle()` resize debouncing and precomputed date ordinals in `LineChart`; cached flash styles and container-level scroll bindings in `ReceiptReconciliationDialog`.
+6. **Optional Native C Extension (`_speedups.c`):**
+   - Provides C-accelerated `c_round_down`, `py_sum_macros`, and `py_score` with transparent pure-Python fallbacks.
+
+---
+
+## 7. Testing & Verification
+
+All **547 tests** execute **100% offline** against isolated temporary databases, preserving the golden baseline in `data/inventory.db` (`36 inventory`, `14 products`, `3 recipes`, `30 aliases`, `0 profile`, `3 settings`):
+
+```bash
+# Run the primary consolidated suites via the project setup runner:
+.venv/bin/python -m scripts.setup_project --test
+
+# Or discover and run the entire 547-test suite directly:
+.venv/bin/python -m unittest discover -s tests
+```
+
+### Test Suites Overview
+
+* `tests/test_domain_core.py` — Config, inventory CRUD, nutrition engine, planner & C/COW benchmarks.
+* `tests/test_receipts_and_reconciliation.py` — OCR reader, drop-zone ingestion, unit conversions & reconciliation dialog.
+* `tests/test_inventory_management.py` — Row-level editing, macro disambiguation (Option 1 vs 2), delete badges & FIFO consumption.
+* `tests/test_recipe_management.py` — Recipe creation, on-the-fly products, keyboard shortcuts, `RecipeDetailsDialog` & CSV/JSON import.
+* `tests/test_settings_and_profile.py` — 4-section Settings controller, theme persistence, clean Profile overlay & destructive action guardrails.
+* `tests/test_e2e_and_invariants.py` — End-to-end workflows, foreign key constraints, finite-float hardening & concurrency invariants.
+* `tests/test_recipe_generator.py` — **75 tests** covering taxonomy fingerprinting, slot bounds, 17 food pairing exclusions, HiGHS/knapsack solver precision, `RecipeGeneratorDialog` GUI workflows, high-volume pantry stress tests, and SQLite `RECIPE_MACROS_VIEW` mathematical identity.
+* `tests/test_e2e_theme_and_efficiency.py`, `tests/test_adversarial_theme_stress.py`, `tests/test_gui_efficiency_and_localization.py` — Bidirectional Dark/Light theme stress tests (100 rapid toggles, 500+ rows), config caching & 100% English UI verification.
+
+---
+
+## 8. Documentation
+
+* **[`docs/GUIDA_FUNZIONAMENTO.md`](docs/GUIDA_FUNZIONAMENTO.md)** — Complete functional and architectural guide with 16 embedded screenshots in [`docs/images/`](docs/images/).
+* **[`docs/STORICO_MODIFICHE.md`](docs/STORICO_MODIFICHE.md)** — Detailed chronological engineering log across all 17 evolutionary phases of the project.

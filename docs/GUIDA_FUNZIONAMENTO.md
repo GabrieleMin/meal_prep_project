@@ -17,6 +17,7 @@ Benvenuto nel manuale operativo e architetturale di **Meal Planner**, l'applicaz
 10. [Impostazioni di Sistema e Configurazione (Scheda Setting)](#10-impostazioni-di-sistema-e-configurazione-scheda-setting)
 11. [Gestione Temi Grafici (Dark Mode vs Light Mode)](#11-gestione-temi-grafici-dark-mode-vs-light-mode)
 12. [Script di Utilità e Strumenti di Sviluppo](#12-script-di-utilità-e-strumenti-di-sviluppo)
+13. [Architettura delle Prestazioni e Ottimizzazioni di Sistema](#13-architettura-delle-prestazioni-e-ottimizzazioni-di-sistema)
 
 ---
 
@@ -50,8 +51,13 @@ La scheda **Pantry** rappresenta il cruscotto centrale delle scorte alimentari p
 1. **Tabella Scorte dell'Inventario**:
    - Mostra tutti gli alimenti con le relative colonne: **Nome Alimento**, **Unità**, **Quantità Rimanente**, **Locazione** (`pantry`, `fridge`, `freezer`) e **Data di Scadenza**.
    - Gli alimenti vicini alla data di scadenza vengono evidenziati graficamente per prevenire lo spreco.
-2. **Pulsante di Eliminazione Dedicato su Ogni Riga**:
-   - All'estremità destra di ciascuna riga è presente un pulsante personalizzato raffigurante una **croce rosso scuro racchiusa in un quadrato stondato**.
+2. **Pulsante di Eliminazione Dedicato su Ogni Riga (Badge Soft Antialiased)**:
+   - All'estremità destra di ciascuna riga è presente un badge personalizzato con icona a croce racchiusa in un quadrato con angoli arrotondati.
+   - **Rendering Antialiased ad Alta Definizione**: Disegnato tramite supersampling 4x con ricampionamento sincrono Pillow Lanczos, eliminando artefatti visivi o scalettature.
+   - **Palette Soft Coral/Rose Naturale**: Adotta tonalità moderne perfettamente accordate ai temi dell'applicazione, evitando stacchi di colore aggressivi:
+     - *Dark Mode*: badge con sfondo `#2d1f22`, bordo `#52272e` e croce soft rose `#f87171`.
+     - *Light Mode*: badge con sfondo `#fbebec`, bordo `#f0b8bd` e croce soft coral `#c94a53`.
+   - **Persistenza al Cambio Tema**: Il componente aggiorna dinamicamente i riferimenti grafici su tutte le righe della tabella al passaggio da dark a light mode, assicurando che le icone non scompaiano mai visivamente dalla finestra.
    - Cliccando sul pulsante viene richiesta una conferma rapida per rimuovere la singola voce fisica dall'inventario, senza intaccare il catalogo generale dei prodotti o le ricette.
 3. **Pannello delle Azioni Rapide**:
    - **Add to inventory**: Form rapido per inserire manualmente un alimento conosciuto.
@@ -100,25 +106,31 @@ Trascinando uno scontrino nell'area Drag & Drop o avviando la scansione, il sist
 
 ## 5. Gestione Ricette e Creazione Interattiva (Scheda Recipes)
 
-La scheda **Recipes** permette di consultare l'elenco delle ricette disponibili e i loro macronutrienti per porzione.
+La scheda **Recipes** offre una panoramica chiara e a tutta larghezza delle ricette disponibili e dei loro macronutrienti per porzione:
 
-![Panoramica Scheda Ricette](images/05_recipes_tab.png)
+![Panoramica Scheda Ricette Full-Width](images/05_recipes_tab.png)
 
-Cliccando sul pulsante **"Add Recipe"**, si apre il builder visivo interattivo [`AddRecipeDialog`](file:///home/gabriele/Desktop/meal_prep/meal_prep_project/meal_planner/gui/dialogs.py).
+L'interfaccia è stata ottimizzata eliminando il form laterale ridondante a favore di un layout spazioso a tutta larghezza con barra delle azioni dedicata:
+- **`➕ New Recipe...`**: Apre la finestra modale avanzata [`AddRecipeDialog`](meal_planner/gui/dialogs.py) con centratura automatica dello schermo e focus immediato.
+- **`👁️ Recipe Details...`** (o **doppio clic** su qualsiasi riga): Apre il popup [`RecipeDetailsDialog`](meal_planner/gui/dialogs.py) mostrando la lista completa degli ingredienti, note e totali nutrizionali (in assenza di selezione esplicita, seleziona automaticamente la prima ricetta disponibile).
+- **`📂 Import from file (.json / .csv)...`**: Importazione massiva di ricette da file `.json` o `.csv`.
+- **`🗑️ Delete Selected Recipe`**: Cancellazione con conferma di sicurezza.
 
 ![Creazione Interattiva Nuova Ricetta](images/06_add_recipe_dialog.png)
 
-### Come creare una ricetta:
-1. Inserisci il **Nome della Ricetta** e imposta le **Porzioni di default**.
-2. Seleziona i **Pasti Abilitati** spuntando una o più opzioni tra *Colazione (Breakfast)*, *Pranzo (Lunch)* e *Cena (Dinner)*.
-3. Aggiungi gli ingredienti:
-   - Seleziona un ingrediente dal menu o digitalo.
-   - Indica la quantità e l'unità di misura (`g`, `kg`, `ml`, `L`, `pcs`, `tbsp`, `tsp`).
-   - Se applicabile, spunta *"Quanto basta (To taste)"* per aromi o condimenti non calorici.
-   - Clicca **"Add Ingredient"**: l'ingrediente compare nella tabella sottostante.
+### Inserimento Rapido ed Ergonomico:
+1. **Nome e Porzioni**: All'apertura il cursore è posizionato direttamente sul campo *Recipe Name*. Premi `Invio` per passare agli ingredienti.
+2. **Pasti Abilitati**: Spunta i pasti di destinazione (*Breakfast*, *Lunch*, *Dinner*).
+3. **Digitazione Fluida degli Ingredienti (Senza Mouse)**:
+   - Digita o seleziona l'ingrediente nel combobox.
+   - Premi `Invio` o `Tab` per spostarti sulla quantità, inserisci il valore e premi `Invio`: l'ingrediente viene aggiunto istantaneamente alla tabella e il cursore si riposiziona sul combobox per il prossimo ingrediente.
+   - Spunta *"To taste (q.b.)"* per ingredienti a dosaggio discrezionale / libero (sale, pepe, spezie, erbe aromatiche, filo d'olio). L'interfaccia include una dicitura e nota esplicativa dedicata:
+     `ℹ️ 'To taste' (q.b. / quanto basta): ingredients added as needed to taste without fixed nutritional weight (e.g. salt, pepper, spices).`
+   - Dalla tabella, premi il tasto `Canc` o `Backspace` per rimuovere rapidamente un ingrediente errato (*"Remove Ingredient"*).
 4. **Calcolo Macronutrienti in Tempo Reale**:
-   - Il riquadro in basso a destra aggiorna all'istante le calorie totali, proteine, carboidrati e grassi per singola porzione.
-5. Inserisci eventuali **Note di preparazione** e clicca **"Save Recipe"**.
+   - I totali e la ripartizione per singola porzione (*"Total per serving"*) vengono ricalcolati dinamicamente ad ogni aggiunta/modifica.
+5. **Salvataggio Rapido**:
+   - Inserisci eventuali note di preparazione e premi **`Ctrl+Invio`** o **`Ctrl+S`** (oppure clicca *"Save Recipe"*).
 
 ---
 
@@ -168,9 +180,9 @@ La scheda **Shopping** calcola in automatico le scorte mancanti incrociando l'in
 
 ---
 
-## 9. Profilo Utente e Obiettivi Fisici (Scheda Profilo)
+## 9. Profilo Utente e Obiettivi Fisici (Scheda Profile)
 
-La scheda **Profilo** accoglie i parametri fisiologici dinamici e gli obiettivi di benessere dell'utente.
+La scheda **Profile** accoglie i parametri fisiologici dinamici e gli obiettivi di benessere dell'utente.
 
 ### Stato Iniziale Non Configurato (Overlay Smussato):
 All'avvio su un database nuovo, o dopo un reset, la schermata si presenta completamente pulita:
@@ -178,7 +190,9 @@ All'avvio su un database nuovo, o dopo un reset, la schermata si presenta comple
 ![Overlay Canvas Stato Vuoto Profilo](images/10_profile_empty_overlay.png)
 
 Un grande rettangolo con angoli arrotondati copre la vista visualizzando il testo:
-> *"Ciao, aggiunti il tuo profilo per iniziare"*
+> *"Hello, add your profile to get started"*
+> *"Set up your profile to calculate caloric needs and start planning meals."*
+> Pulsante: *"➕ Add Profile"*
 
 ### Profilo Configurato:
 Compilando i propri dati, l'overlay scompare rivelando la schermata operativa completa:
@@ -192,9 +206,10 @@ Compilando i propri dati, l'overlay scompare rivelando la schermata operativa co
 
 ---
 
-## 10. Impostazioni di Sistema e Configurazione (Scheda Setting)
+## 10. Impostazioni di Sistema e Configurazione (Scheda Settings)
 
-La scheda **Setting** adotta una struttura a sezioni isolate, selezionabili dalla barra superiore:
+La scheda **Settings** adotta una struttura a sezioni isolate, selezionabili dalla barra superiore:
+All'avvio, l'applicazione si apre sempre di default sulla scheda **Pantry** (indice 0), garantendo accesso immediato alla visualizzazione dell'inventario.
 
 ### 10.1 Sezione Style & Configuration
 Gestisce lo stile grafico e le preferenze globali dell'applicazione.
@@ -243,6 +258,7 @@ Meal Planner supporta nativamente sia la modalità scura ad alto contrasto che l
    - Configurata nella scheda Setting: garantisce che ogni volta che apri il programma venga caricato il tema desiderato.
 2. **Switch Temporaneo in Tempo Reale (Header Button)**:
    - Cliccando sul pulsante rapido in alto a destra (*"Light mode"* / *"Dark mode"*), l'applicazione commuta istantaneamente la palette di colori (tabelle, grafici, campi di testo, canvas) **per la sessione corrente**, senza alterare la preferenza di default salvata nel database.
+   - **Propagazione Dinamica degli Elementi Grafici**: La commutazione del tema invoca l'aggiornamento automatico dei componenti custom (`Table.update_delete_icon`, `LineChart.redraw`), riassegnando immediatamente le nuove icone PhotoImage a tutte le righe esistenti e prevenendo qualsiasi scomparsa visiva dovuta al garbage collection delle immagini Tcl.
 
 ---
 
@@ -272,3 +288,58 @@ Launcher unificato per verificare e dimostrare il funzionamento della pipeline O
   python scripts/demo_receipt.py --reconcile
   ```
   Apre direttamente la finestra modale di riconciliazione `ReceiptReconciliationDialog` popolata con 7 voci di test (prodotti riconosciuti e non riconosciuti), permettendo di testare immediatamente l'inserimento in dispensa e la definizione di nuovi prodotti.
+
+---
+
+## 13. Architettura delle Prestazioni e Ottimizzazioni di Sistema
+
+L'intera applicazione è stata sottoposta a un audit approfondito di efficienza per massimizzare la reattività dell'interfaccia utente, minimizzare il consumo di memoria e ottimizzare il traffico di query verso SQLite, garantendo zero overhead e tempi di risposta immediati anche su macchine a basse risorse.
+
+### 13.1 Caching di Configurazione In-Memory
+- Il modulo [`meal_planner/config.py`](meal_planner/config.py) mantiene una cache thread-safe in memoria di tutti i parametri applicativi.
+- Le chiamate frequenti a `config.get(...)` sono trasformate in lookup di dizionario ad accesso O(1), azzerando le connessioni SQLite e le interrogazioni ridondanti a `APP_SETTINGS`. L'aggiornamento della cache avviene automaticamente a ogni salvataggio con invalidazione atomica.
+
+### 13.2 Ottimizzazioni del Livello Dati (SQLite & Schema)
+- **Directory Caching**: In [`meal_planner/db/connection.py`](meal_planner/db/connection.py), i controlli di esistenza della cartella dati su filesystem vengono eseguiti una sola volta per sessione.
+- **WAL Pragma Selettivo**: Il comando `PRAGMA journal_mode = WAL;` viene applicato solo in fase di configurazione iniziale del file di database o se non già attivo, eliminando roundtrip superflui a ogni connessione.
+- **Ispezione Schema in Singolo Passaggio**: La verifica e l'aggiunta di colonne dinamiche in `create_schema` esegue una sola query `PRAGMA table_info` per tabella anziché chiamate multiple per colonna.
+- **Query Bulk nel Planner Nutrizionale**: I moduli [`meal_planner/planner/day.py`](meal_planner/planner/day.py) e `storage.py` estraggono gli ingredienti di tutte le ricette pianificate mediante un'unica query SQL bulk con raggruppamento in memoria, eliminando il pattern di query N+1.
+- **Scansione Indicizzata O(1) per Riconciliazione**: In [`meal_planner/inventory.py`](meal_planner/inventory.py), la catalogazione degli alimenti per la riconciliazione scontrini usa un indice progressivo evitando subquery correlate lente.
+
+### 13.3 Calcolo Matematico ed Elaborazione OCR
+- **Fattorizzazione Divisioni Nutrizionali**: Nel modulo [`meal_planner/engine/nutrition.py`](meal_planner/engine/nutrition.py), il fattore di conversione per 100g (`g / 100.0`) viene calcolato una sola volta per ingrediente anziché rieseguire 8 divisioni floating-point per ogni macronutriente.
+- **Pre-Normalizzazione Catalogo OCR**: Nel lettore di scontrini [`meal_planner/receipts/reader.py`](meal_planner/receipts/reader.py), le voci del catalogo prodotti vengono normalizzate una volta all'avvio della sessione OCR e i pattern regex sono pre-compilati a livello di modulo.
+
+### 13.4 Reattività Grafica e Debouncing GUI
+- **Simulazione Differita delle Ricette**: In [`meal_planner/gui/app.py`](meal_planner/gui/app.py), le modifiche all'inventario o alla lista della spesa non ricalcolano immediatamente la simulazione completa delle ricette se l'utente si trova su schede diverse. Il ricalcolo scatta solo quando l'utente seleziona effettivamente la scheda "Recipes".
+- **Debouncing del Grafico del Peso**: In [`meal_planner/gui/widgets.py`](meal_planner/gui/widgets.py), l'evento `<Configure>` del widget `LineChart` utilizza `after_idle` con cancellazione dei job concorrenti per evitare ridisegni continui a ogni singolo pixel durante il ridimensionamento della finestra, e pre-calcola gli ordinali temporali in fase di plotting.
+- **Caching Stili Riconciliazione Scontrini**: Le immagini e gli stili dei campi di riconciliazione in `ReceiptReconciliationDialog` vengono inizializzati una volta per sessione grafica e riutilizzati tra aperture successive.
+- **Event Binding a Livello Contenitore**: Gli eventi di rotella del mouse (`<MouseWheel>`) nella tabella scontrini sono legati al solo contenitore principale, eliminando decine di binding individuali per ogni singola cella.
+
+---
+
+## 14. Pipeline Ibrida di Generazione Ricette (Slot + Food Pairing + ILP/CSP)
+
+Il package [`meal_planner/generator/`](../meal_planner/generator/) fornisce un sistema deterministico e **100% offline** di generazione automatica di ricette che coniuga grammatica culinaria, armonia aromatica e programmazione lineare vincolata:
+
+### 14.1 Architettura a 3 Livelli
+1. **Tassonomia a 2 Livelli & Archetipi a Slot ([`taxonomy.py`](../meal_planner/generator/taxonomy.py), [`slots.py`](../meal_planner/generator/slots.py))**:
+   - **Livello A (Dizionario Semantico)**: associa istantaneamente gli ingredienti noti ai ruoli gastronomici (`CARB_BASE`, `PROTEIN_MAIN`, `VEGETABLE`, `FAT_SEASONING`, `DAIRY_BASE`, `FRUIT`, `AROMA_TASTE`).
+   - **Livello B (Macro Fingerprinting Automatico)**: classifica qualsiasi nuovo alimento registrato dall'utente analizzando matematicamente i macronutrienti per 100g e la densità energetica, supportando anche l'idoneità multi-ruolo (es. Parmigiano come aroma o come proteina principale).
+   - **4 Archetipi Culinari**: `Grain / Pasta Dish`, `Main & Side Plate`, `One-Pot Balanced Bowl`, `Breakfast / Snack Bowl`, ciascuno con limiti fisiologici di porzione `[min_g, max_g]`.
+2. **Grafo di Food Pairing ([`food_pairing.py`](../meal_planner/generator/food_pairing.py))**:
+   - Applica 17 regole di **esclusione mutua rigida** (es. pesce con latticini dolci, oli da cucina nelle bowl di colazione, farina cruda in piatti freddi).
+   - Valuta l'armonia complessiva della combinazione tramite una matrice di affinità a 4 livelli (*Flavor Harmony Matrix*).
+3. **Ottimizzatore Matematico ILP/CSP ([`solver.py`](../meal_planner/generator/solver.py), [`pipeline.py`](../meal_planner/generator/pipeline.py))**:
+   - Calcola i dosaggi ottimali in grammi tramite `scipy.optimize.linprog` (metodo HiGHS Simplex, con fallback knapsack deterministico in puro Python).
+   - Centra il target calorico del pasto entro $\pm 5\%$ e privilegia nella funzione obiettivo le confezioni già aperte (`Open_Remainder > 0`) e gli alimenti prossimi alla scadenza (FIFO).
+   - Sintetizza automaticamente il titolo della ricetta e le istruzioni di preparazione passo-passo in 4 fasi.
+
+### 14.2 Interfaccia Grafica (`RecipeGeneratorDialog`)
+Dalla scheda **Recipes**, cliccando sul pulsante **`✨ Generate Recipe...`**, si apre la finestra modale interattiva `RecipeGeneratorDialog`:
+- Selezione di **Meal** (`lunch`, `dinner`, `breakfast`), **Archetype** (o `Auto`), **Target kcal** (pre-calcolato dal profilo o personalizzabile) e spunta **Pantry Only (FIFO priority)**.
+- Pulsante **`🎲 Regenerate / Try Another`** per esplorare combinazioni alternative di ingredienti.
+- Anteprima completa con nome ricetta modificabile, tabella ingredienti con stato dispensa (`Opened (FIFO)`, `In pantry`, `Missing`), riepilogo macro per porzione e passaggi di preparazione modificabili.
+- Pulsante **`💾 Save to Recipes`** per salvare atomicamente la ricetta nel database SQLite e aggiornare istantaneamente la tabella principale.
+
+

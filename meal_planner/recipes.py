@@ -41,10 +41,12 @@ def is_ingredient_known(conn: sqlite3.Connection, name: str) -> bool:
         return False
     entry = name.strip()
     cur = conn.cursor()
-    cur.execute("SELECT 1 FROM ALIASES WHERE Name = ? COLLATE NOCASE", (entry,))
-    if cur.fetchone():
-        return True
-    cur.execute("SELECT 1 FROM SUBSTITUTE_GROUPS WHERE Name = ? COLLATE NOCASE", (entry,))
+    cur.execute("""
+        SELECT 1 FROM ALIASES WHERE Name = ? COLLATE NOCASE
+        UNION ALL
+        SELECT 1 FROM SUBSTITUTE_GROUPS WHERE Name = ? COLLATE NOCASE
+        LIMIT 1
+    """, (entry, entry))
     return cur.fetchone() is not None
 
 
@@ -164,7 +166,7 @@ def _yes(value):
     return str(value).strip().lower() in ("1", "yes", "y", "true", "x", "si", "sì")   # "si"/"sì": CSV files from the Italian version
 
 
-def create_recipe(conn, name, meals, ingredients, notes=None) -> dict:
+def create_recipe(conn, name, meals, ingredients, notes=None, _alias_cache=None, _group_cache=None) -> dict:
     """Creates a recipe atomically. `ingredients` = [(name, quantity, unit)] or [(name, quantity, unit, to_taste)]
     or dicts with 'product' or 'group', 'quantity', 'unit', 'to_taste'. ValueError lists all the problems."""
     name, errors, rows = (name or "").strip(), [], []
@@ -177,9 +179,11 @@ def create_recipe(conn, name, meals, ingredients, notes=None) -> dict:
     for ing in ingredients:
         d = ing if isinstance(ing, dict) else dict(zip(("product", "quantity", "unit", "to_taste"), ing))
         entry = d.get("product") or d.get("group")
-        product_id, group_id = _id(conn, "ALIASES", "ID", entry), None
+        entry_key = entry.strip().lower() if (entry and isinstance(entry, str)) else None
+        product_id = _alias_cache.get(entry_key) if (_alias_cache is not None and entry_key) else _id(conn, "ALIASES", "ID", entry)
+        group_id = None
         if product_id is None:
-            group_id = _id(conn, "SUBSTITUTE_GROUPS", "Group_ID", entry)
+            group_id = _group_cache.get(entry_key) if (_group_cache is not None and entry_key) else _id(conn, "SUBSTITUTE_GROUPS", "Group_ID", entry)
         try:
             q = float(str(d.get("quantity")).replace(",", "."))
             if not math.isfinite(q) or q <= 0:
@@ -261,9 +265,12 @@ def import_file(conn, path):
     except (OSError, ValueError, KeyError) as e:
         raise ValueError(f"File not readable: {e}")
     created, errors = 0, []
+    alias_cache = {r[0].strip().lower(): r[1] for r in conn.execute("SELECT Name, ID FROM ALIASES WHERE Name IS NOT NULL")}
+    group_cache = {r[0].strip().lower(): r[1] for r in conn.execute("SELECT Name, Group_ID FROM SUBSTITUTE_GROUPS WHERE Name IS NOT NULL")}
     for r in listing:
         try:
-            create_recipe(conn, r.get("name"), r.get("meals", []), r.get("ingredients", []), r.get("notes"))
+            create_recipe(conn, r.get("name"), r.get("meals", []), r.get("ingredients", []), r.get("notes"),
+                          _alias_cache=alias_cache, _group_cache=group_cache)
             created += 1
         except ValueError as e:
             errors.append(str(e))

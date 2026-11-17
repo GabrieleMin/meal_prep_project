@@ -48,11 +48,13 @@ ALL_TABLES = [
 ]
 
 
-def _add_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> bool:
-    present = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
-    if column in present:
+def _add_column(conn: sqlite3.Connection, table: str, column: str, ddl: str, existing_cols: set = None) -> bool:
+    if existing_cols is None:
+        existing_cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column in existing_cols:
         return False
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    existing_cols.add(column)
     return True
 
 
@@ -84,8 +86,9 @@ def create_schema(conn: sqlite3.Connection) -> None:
             Density_kg_per_L    REAL    CHECK (Density_kg_per_L > 0)
         );
     """)
-    _add_column(conn, "PRODUCTS", "Grams_per_piece", "REAL CHECK (Grams_per_piece > 0)")
-    _add_column(conn, "PRODUCTS", "Density_kg_per_L", "REAL CHECK (Density_kg_per_L > 0)")
+    prod_cols = {r[1] for r in conn.execute("PRAGMA table_info(PRODUCTS)")}
+    _add_column(conn, "PRODUCTS", "Grams_per_piece", "REAL CHECK (Grams_per_piece > 0)", existing_cols=prod_cols)
+    _add_column(conn, "PRODUCTS", "Density_kg_per_L", "REAL CHECK (Density_kg_per_L > 0)", existing_cols=prod_cols)
 
     # 2. ALIASES
     cur.execute("""
@@ -121,9 +124,11 @@ def create_schema(conn: sqlite3.Connection) -> None:
             FOREIGN KEY (ID) REFERENCES PRODUCTS(ID)
         );
     """)
+    inv_cols = {r[1] for r in conn.execute("PRAGMA table_info(INVENTORY)")}
     _add_column(conn, "INVENTORY", "Expiration_Date",
                 "TEXT CHECK (Expiration_Date IS NULL OR "
-                "Expiration_Date GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-9][0-9]')")
+                "Expiration_Date GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-9][0-9]')",
+                existing_cols=inv_cols)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_inventory_product ON INVENTORY(ID);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_inventory_expiration ON INVENTORY(Expiration_Date);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_inventory_product_loc ON INVENTORY(ID, Location);")
@@ -282,6 +287,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
             Default_servings        INTEGER NOT NULL DEFAULT 1 CHECK (Default_servings BETWEEN 1 AND 20)
         );
     """)
+    prof_cols = {r[1] for r in conn.execute("PRAGMA table_info(PROFILE)")}
     for col, ddl in (
         ("Target_weight_kg", "REAL CHECK (Target_weight_kg > 0)"),
         ("Weekly_rate_kg", "REAL CHECK (Weekly_rate_kg > 0)"),
@@ -291,7 +297,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         ("Use_manual_kcal", "INTEGER NOT NULL DEFAULT 0"),
         ("Default_servings", "INTEGER NOT NULL DEFAULT 1 CHECK (Default_servings BETWEEN 1 AND 20)"),
     ):
-        _add_column(conn, "PROFILE", col, ddl)
+        _add_column(conn, "PROFILE", col, ddl, existing_cols=prof_cols)
 
     # 16. WEIGHT_LOG
     cur.execute("""

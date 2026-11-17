@@ -43,14 +43,20 @@ class VirtualInventory:
 
     def write(self, conn, ids) -> None:
         """Writes the state of products `ids` to the DB (updates or deletes rows). Does not commit."""
+        deletes = []
+        updates = []
         for product_id in ids:
             new = {r[0]: r for r in self.rows.get(product_id, [])}
             for (row_id,) in conn.execute("SELECT Row_ID FROM INVENTORY WHERE ID = ?", (product_id,)).fetchall():
                 if row_id not in new:
-                    conn.execute("DELETE FROM INVENTORY WHERE Row_ID = ?", (row_id,))
+                    deletes.append((row_id,))
             for row_id, (_, _, number, remainder) in new.items():
-                conn.execute("UPDATE INVENTORY SET Intact_Items = ?, Open_Remainder = ? "
-                             "WHERE Row_ID = ?", (number, remainder, row_id))
+                updates.append((number, remainder, row_id))
+        if deletes:
+            conn.executemany("DELETE FROM INVENTORY WHERE Row_ID = ?", deletes)
+        if updates:
+            conn.executemany("UPDATE INVENTORY SET Intact_Items = ?, Open_Remainder = ? "
+                             "WHERE Row_ID = ?", updates)
 
     def consume(self, product_id: int, quantity: float) -> dict:
         orig_rows = self.rows.get(product_id, [])

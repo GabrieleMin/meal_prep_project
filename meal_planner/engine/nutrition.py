@@ -60,12 +60,13 @@ def recipe_macros(conn, recipe_id: int, products: dict = None, choices: dict = N
         if g is None:
             incomplete = True
             continue
+        factor = g / 100.0
         for m in MACROS:
             v = p["macro"][m]
             if v is None:          # missing optional nutrient: counts as 0 and is reported
                 incomplete = True
                 v = 0.0
-            tot[m] += g / 100.0 * v
+            tot[m] += factor * v
     tot["Incomplete_Data"] = incomplete
     return tot
 
