@@ -44,11 +44,11 @@ from meal_planner.inventory import (
     _round_down_to_hundredth as inv_round_down,
 )
 from meal_planner import engine as m
-from meal_planner.engine.nutrition import MACROS
-from meal_planner.engine.virtual_inventory import VirtualInventory
-from meal_planner.planner.day import _score
-from meal_planner.planner import day as plan_day
-from meal_planner.planner import week as plan_week
+from meal_planner.engine import MACROS
+from meal_planner.engine import VirtualInventory
+from meal_planner.planner import _score
+from meal_planner import planner as plan_day
+from meal_planner import planner as plan_week
 from scripts.seed_inventory import seed as seed_products
 from scripts.seed_recipes import seed as seed_recipes_data
 
@@ -644,7 +644,7 @@ class TestDomainBoundaryEdgeCases(unittest.TestCase):
 
     def test_engine_unit_conversion_boundary_and_missing_factors(self):
         """Unit conversions handle zero quantities, missing g_piece, and missing densities gracefully."""
-        from meal_planner.engine.nutrition import grams, inventory_quantity
+        from meal_planner.engine import grams, inventory_quantity
 
         prod_no_piece = {"unit": "pcs", "g_piece": None, "density": None}
         self.assertEqual(grams(0, "g", prod_no_piece), 0.0)
@@ -659,7 +659,7 @@ class TestDomainBoundaryEdgeCases(unittest.TestCase):
 
     def test_recipe_macros_zero_servings_and_partial_nutrients(self):
         """recipe_macros correctly computes zero servings (0.0) and flags Incomplete_Data on NULL nutrients."""
-        from meal_planner.engine.nutrition import recipe_macros, MACROS
+        from meal_planner.engine import recipe_macros, MACROS
 
         conn = get_connection(self.db_path)
         conn.execute(

@@ -18,31 +18,21 @@ def _ensure_db_location():
             os.unlink(LEGACY_DB_PATH)
         except OSError:
             pass
-    elif os.path.exists(LEGACY_DB_PATH):
-        if not os.path.exists(DEFAULT_DB_PATH):
-            shutil.move(LEGACY_DB_PATH, DEFAULT_DB_PATH)
-            for ext in ("-wal", "-shm"):
-                wal_legacy = LEGACY_DB_PATH + ext
-                if os.path.exists(wal_legacy):
-                    shutil.move(wal_legacy, DEFAULT_DB_PATH + ext)
+    elif os.path.exists(LEGACY_DB_PATH) and not os.path.exists(DEFAULT_DB_PATH):
+        for ext in ("", "-wal", "-shm"):
+            if os.path.exists(LEGACY_DB_PATH + ext):
+                shutil.move(LEGACY_DB_PATH + ext, DEFAULT_DB_PATH + ext)
 
 
 _ensure_db_location()
 
 DB_PATH = os.environ.get("MEAL_PLANNER_DB") or DEFAULT_DB_PATH
-
-
 _VERIFIED_DIRS = set()
 _WAL_CONFIGURED_PATHS = set()
 
 
 def get_connection(db_path: str = None) -> sqlite3.Connection:
-    """
-    Opens a database connection with referential integrity checks
-    enabled. SQLite disables them by default for historical compatibility,
-    so they must be re-enabled explicitly on every connection.
-    Also enables WAL journal mode and normal sync for performance.
-    """
+    """Opens a SQLite connection with FK constraints, WAL mode, and NORMAL sync."""
     if db_path is None:
         db_path = os.environ.get("MEAL_PLANNER_DB") or DB_PATH
 
@@ -57,8 +47,7 @@ def get_connection(db_path: str = None) -> sqlite3.Connection:
 
     norm_path = os.path.abspath(db_path) if db_path != ":memory:" else ":memory:"
     if norm_path not in _WAL_CONFIGURED_PATHS:
-        mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
-        if mode.lower() != "wal":
+        if conn.execute("PRAGMA journal_mode;").fetchone()[0].lower() != "wal":
             conn.execute("PRAGMA journal_mode = WAL;")
         _WAL_CONFIGURED_PATHS.add(norm_path)
 

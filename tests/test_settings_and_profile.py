@@ -48,8 +48,8 @@ from meal_planner.db.schema import create_schema, ALL_TABLES
 from meal_planner.db.schema import migrate
 import meal_planner.config as cfg
 import meal_planner.inventory as inv
-from meal_planner.engine import catalog as engine_catalog
-from meal_planner.engine import profile as engine_profile
+from meal_planner import engine as engine_catalog
+from meal_planner import engine as engine_profile
 from meal_planner.gui.app import App
 
 
@@ -1578,8 +1578,8 @@ from meal_planner.db.connection import get_connection, DB_PATH
 from meal_planner.db.schema import create_schema, ALL_TABLES
 from meal_planner.db.schema import migrate
 import meal_planner.inventory as inv
-from meal_planner.engine import catalog as engine_catalog
-from meal_planner.engine import profile as engine_profile
+from meal_planner import engine as engine_catalog
+from meal_planner import engine as engine_profile
 from meal_planner.gui.app import App
 from meal_planner.gui.dialogs import ProfileSetupDialog
 

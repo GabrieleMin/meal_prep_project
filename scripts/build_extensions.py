@@ -15,25 +15,12 @@ def build():
     if not C_SRC.exists():
         print(f"Error: {C_SRC} not found.", file=sys.stderr)
         return 1
-
-    include_dir = sysconfig.get_path("include")
-    gcc = os.environ.get("CC", "gcc")
-    cmd = [
-        gcc,
-        "-O3",
-        "-shared",
-        "-fPIC",
-        f"-I{include_dir}",
-        str(C_SRC),
-        "-o",
-        str(OUT_SO)
-    ]
+    cmd = [os.environ.get("CC", "gcc"), "-O3", "-shared", "-fPIC", f"-I{sysconfig.get_path('include')}", str(C_SRC), "-o", str(OUT_SO)]
     print(f"Compiling C extension: {' '.join(cmd)}")
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         print(f"Compilation failed:\n{res.stderr}", file=sys.stderr)
         return res.returncode
-
     print(f"Successfully compiled native extension: {OUT_SO}")
     return 0
 

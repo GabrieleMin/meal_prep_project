@@ -1,17 +1,4 @@
-"""
-recipes.py - Recipe creation, import and deletion (quantities for ONE serving).
-
-Command line:
-    python -m meal_planner.recipes import recipes.json
-    python -m meal_planner.recipes import recipes.csv
-
-JSON format: [{"name": "...", "meals": ["lunch", "dinner"], "notes": "...",
-               "ingredients": [{"product": "Rice", "quantity": 100, "unit": "g"},
-                               {"group": "Cereal", "quantity": 80, "unit": "g", "to_taste": false}]}]
-CSV format (one row per ingredient, separator ';' or ','): columns
-    recipe;meals;product;quantity;unit;to_taste      (meals separated by '|', e.g. lunch|dinner)
-Products and groups are given by name (aliases too, case-insensitive).
-"""
+"""recipes.py - Recipe creation, import and deletion (quantities for ONE serving)."""
 
 import argparse
 import csv
@@ -22,8 +9,8 @@ import sqlite3
 import sys
 
 from meal_planner import engine as m
-from meal_planner.db.connection import get_connection, DB_PATH
-from meal_planner.inventory import get_next_product_id, _normalize_macro_dict
+from meal_planner.db.connection import DB_PATH, get_connection
+from meal_planner.inventory import _validate_and_save_product
 
 UNITS = ("g", "kg", "ml", "L", "pcs", "tbsp", "tsp")
 
@@ -35,19 +22,15 @@ CANONICAL_PRODUCT_UNITS = {
 
 
 def is_ingredient_known(conn: sqlite3.Connection, name: str) -> bool:
-    """Checks if an ingredient name resolves to an existing product in ALIASES
-    or a substitute group in SUBSTITUTE_GROUPS (case-insensitive)."""
+    """Checks if an ingredient name resolves to ALIASES or SUBSTITUTE_GROUPS (case-insensitive)."""
     if not name or not isinstance(name, str) or not name.strip():
         return False
     entry = name.strip()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT 1 FROM ALIASES WHERE Name = ? COLLATE NOCASE
-        UNION ALL
-        SELECT 1 FROM SUBSTITUTE_GROUPS WHERE Name = ? COLLATE NOCASE
-        LIMIT 1
-    """, (entry, entry))
-    return cur.fetchone() is not None
+    return conn.execute(
+        "SELECT 1 FROM ALIASES WHERE Name = ? COLLATE NOCASE "
+        "UNION ALL SELECT 1 FROM SUBSTITUTE_GROUPS WHERE Name = ? COLLATE NOCASE LIMIT 1",
+        (entry, entry),
+    ).fetchone() is not None
 
 
 def register_product_on_the_fly(
@@ -59,91 +42,35 @@ def register_product_on_the_fly(
     density_kg_per_l: float = None,
     db_path: str = None,
 ) -> int:
-    """Registers an unknown product and its primary alias on-the-fly into PRODUCTS and ALIASES.
-    Returns the integer product ID."""
-    manage_conn = (conn is None)
+    """Registers an unknown product and its primary alias on-the-fly into PRODUCTS and ALIASES."""
+    manage_conn = conn is None
     if manage_conn:
         conn = get_connection(db_path)
     try:
         if not name or not isinstance(name, str) or not name.strip():
             raise ValueError("Product name cannot be empty.")
         clean_name = name.strip()
-
         cur = conn.cursor()
 
-        # Idempotent return if alias already exists
-        cur.execute("SELECT ID FROM ALIASES WHERE Name = ? COLLATE NOCASE", (clean_name,))
-        row = cur.fetchone()
+        row = cur.execute("SELECT ID FROM ALIASES WHERE Name = ? COLLATE NOCASE", (clean_name,)).fetchone()
         if row:
             return row[0]
 
-        # Collision check with substitute groups
-        cur.execute("SELECT 1 FROM SUBSTITUTE_GROUPS WHERE Name = ? COLLATE NOCASE", (clean_name,))
-        if cur.fetchone():
+        if cur.execute("SELECT 1 FROM SUBSTITUTE_GROUPS WHERE Name = ? COLLATE NOCASE", (clean_name,)).fetchone():
             raise ValueError(f"Name '{clean_name}' conflicts with an existing substitute group.")
 
-        # Unit canonicalization
-        raw_u = (unit or "").strip().lower().rstrip(".")
+        raw_u = (unit if isinstance(unit, str) else "").strip().lower().rstrip(".")
         canonical_unit = CANONICAL_PRODUCT_UNITS.get(raw_u)
         if canonical_unit not in ("kg", "L", "pcs"):
             raise ValueError(f"Invalid unit '{unit}'. Must be one of kg, g, L, ml, pcs/pz.")
 
-        # Macro validation
-        if not isinstance(macros, dict):
-            raise ValueError("macros must be a dictionary.")
-
-        norm_macros = _normalize_macro_dict(macros)
-        required_keys = ["Kcal_100g", "Protein_100g", "Carbs_100g", "Fat_100g"]
-        missing = [k for k in required_keys if k not in norm_macros or norm_macros[k] is None]
-        if missing:
-            raise ValueError(f"Missing required macro fields: {', '.join(missing)}")
-
-        for k, val in list(norm_macros.items()):
-            if val is not None:
-                if isinstance(val, bool):
-                    raise ValueError(f"Macro '{k}' cannot be a boolean.")
-                try:
-                    val_f = float(str(val).replace(",", "."))
-                except (ValueError, TypeError):
-                    raise ValueError(f"Macro '{k}' must be numeric, got {val!r}")
-                if not math.isfinite(val_f) or val_f < 0:
-                    raise ValueError(f"Macro '{k}' must be a non-negative finite number, got {val!r}")
-                norm_macros[k] = val_f
-
-        # Density default for liquids
-        if canonical_unit == "L" and density_kg_per_l is None:
-            density_kg_per_l = 1.0
-
-        # Optional factor validation
-        for factor_name, factor_val in (("grams_per_piece", grams_per_piece), ("density_kg_per_l", density_kg_per_l)):
-            if factor_val is not None:
-                if isinstance(factor_val, bool) or not isinstance(factor_val, (int, float)) or not math.isfinite(factor_val) or factor_val <= 0:
-                    raise ValueError(f"{factor_name} must be a positive finite number, got {factor_val!r}")
-
         try:
-            cur.execute(
-                """
-                INSERT INTO PRODUCTS (
-                    Unit, Kcal_100g, Protein_100g, Carbs_100g, Sugars_100g,
-                    Fat_100g, Saturated_fat_100g, Fiber_100g, Salt_100g,
-                    Grams_per_piece, Density_kg_per_L
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    canonical_unit,
-                    norm_macros["Kcal_100g"],
-                    norm_macros["Protein_100g"],
-                    norm_macros["Carbs_100g"],
-                    norm_macros.get("Sugars_100g"),
-                    norm_macros["Fat_100g"],
-                    norm_macros.get("Saturated_fat_100g"),
-                    norm_macros.get("Fiber_100g"),
-                    norm_macros.get("Salt_100g"),
-                    grams_per_piece,
-                    density_kg_per_l,
-                ),
+            next_id, _, _ = _validate_and_save_product(
+                cur, unit=canonical_unit, macros=macros,
+                grams_per_piece=grams_per_piece, density_kg_per_l=density_kg_per_l,
+                normalize_keys=True, allow_str_macros=True, allow_comma=True,
+                allow_str_factors=False, default_liquid_density=True, err_cls=ValueError,
             )
-            next_id = cur.lastrowid
             cur.execute("INSERT INTO ALIASES (Name, ID) VALUES (?, ?)", (clean_name, next_id))
             conn.commit()
             return next_id
@@ -163,12 +90,11 @@ def _id(conn, table, column, name):
 
 
 def _yes(value):
-    return str(value).strip().lower() in ("1", "yes", "y", "true", "x", "si", "sì")   # "si"/"sì": CSV files from the Italian version
+    return str(value).strip().lower() in ("1", "yes", "y", "true", "x", "si", "sì")
 
 
 def create_recipe(conn, name, meals, ingredients, notes=None, _alias_cache=None, _group_cache=None) -> dict:
-    """Creates a recipe atomically. `ingredients` = [(name, quantity, unit)] or [(name, quantity, unit, to_taste)]
-    or dicts with 'product' or 'group', 'quantity', 'unit', 'to_taste'. ValueError lists all the problems."""
+    """Creates a recipe atomically. ValueError lists all validation problems."""
     name, errors, rows = (name or "").strip(), [], []
     if not name:
         errors.append("name is missing")
@@ -181,9 +107,10 @@ def create_recipe(conn, name, meals, ingredients, notes=None, _alias_cache=None,
         entry = d.get("product") or d.get("group")
         entry_key = entry.strip().lower() if (entry and isinstance(entry, str)) else None
         product_id = _alias_cache.get(entry_key) if (_alias_cache is not None and entry_key) else _id(conn, "ALIASES", "ID", entry)
-        group_id = None
-        if product_id is None:
-            group_id = _group_cache.get(entry_key) if (_group_cache is not None and entry_key) else _id(conn, "SUBSTITUTE_GROUPS", "Group_ID", entry)
+        group_id = (
+            (_group_cache.get(entry_key) if (_group_cache is not None and entry_key) else _id(conn, "SUBSTITUTE_GROUPS", "Group_ID", entry))
+            if product_id is None else None
+        )
         try:
             q = float(str(d.get("quantity")).replace(",", "."))
             if not math.isfinite(q) or q <= 0:
@@ -204,8 +131,10 @@ def create_recipe(conn, name, meals, ingredients, notes=None, _alias_cache=None,
     try:
         rid = conn.execute("INSERT INTO RECIPES (Name, Notes) VALUES (?, ?)", (name, notes)).lastrowid
         conn.executemany("INSERT INTO RECIPE_MEALS (Recipe_ID, Meal) VALUES (?, ?)", [(rid, p) for p in meals])
-        conn.executemany("INSERT INTO RECIPE_INGREDIENTS (Recipe_ID, ID, Group_ID, Quantity, Unit, To_Taste) "
-                         "VALUES (?, ?, ?, ?, ?, ?)", [(rid, *r) for r in rows])
+        conn.executemany(
+            "INSERT INTO RECIPE_INGREDIENTS (Recipe_ID, ID, Group_ID, Quantity, Unit, To_Taste) VALUES (?, ?, ?, ?, ?, ?)",
+            [(rid, *r) for r in rows],
+        )
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
@@ -213,10 +142,10 @@ def create_recipe(conn, name, meals, ingredients, notes=None, _alias_cache=None,
     except Exception:
         conn.rollback()
         raise
-    warnings = []
-    if m.recipe_macros(conn, rid)["Incomplete_Data"]:
-        warnings.append("conversion data missing (g per piece, density) or optional nutrients: "
-                      "the macros may be underestimated")
+    warnings = (
+        ["conversion data missing (g per piece, density) or optional nutrients: the macros may be underestimated"]
+        if m.recipe_macros(conn, rid)["Incomplete_Data"] else []
+    )
     return {"Recipe_ID": rid, "warnings": warnings}
 
 
@@ -239,21 +168,24 @@ def delete_recipe(conn, name) -> None:
 def _from_csv(path) -> list:
     with open(path, newline="", encoding="utf-8-sig") as f:
         text = f.read()
-    separator = ";" if ";" in text.splitlines()[0] else ","
+    lines = text.splitlines()
+    separator = ";" if ";" in lines[0] else ","
     recipes = {}
-    for r in csv.DictReader(text.splitlines(), delimiter=separator):
-        entry = recipes.setdefault(r["recipe"], {"name": r["recipe"], "ingredients": [],
-                                                 "meals": [p.strip() for p in r["meals"].split("|") if p.strip()]})
-        if "notes" in r and r["notes"] and "notes" not in entry:
+    for r in csv.DictReader(lines, delimiter=separator):
+        entry = recipes.setdefault(
+            r["recipe"],
+            {"name": r["recipe"], "ingredients": [], "meals": [p.strip() for p in r["meals"].split("|") if p.strip()]},
+        )
+        if r.get("notes") and "notes" not in entry:
             entry["notes"] = r["notes"].strip()
-        entry["ingredients"].append({"product": r["product"], "quantity": r["quantity"], "unit": r["unit"],
-                                    "to_taste": r.get("to_taste", "")})
+        entry["ingredients"].append({
+            "product": r["product"], "quantity": r["quantity"], "unit": r["unit"], "to_taste": r.get("to_taste", ""),
+        })
     return list(recipes.values())
 
 
 def import_file(conn, path):
-    """Imports a .json or .csv file. Each recipe is atomic: the invalid ones are skipped and reported.
-    Returns (recipes created, list of errors)."""
+    """Imports a .json or .csv file. Returns (recipes_created, errors)."""
     try:
         if os.path.splitext(path)[1].lower() == ".json":
             with open(path, encoding="utf-8") as f:
@@ -264,13 +196,16 @@ def import_file(conn, path):
             listing = _from_csv(path)
     except (OSError, ValueError, KeyError) as e:
         raise ValueError(f"File not readable: {e}")
+
     created, errors = 0, []
     alias_cache = {r[0].strip().lower(): r[1] for r in conn.execute("SELECT Name, ID FROM ALIASES WHERE Name IS NOT NULL")}
     group_cache = {r[0].strip().lower(): r[1] for r in conn.execute("SELECT Name, Group_ID FROM SUBSTITUTE_GROUPS WHERE Name IS NOT NULL")}
     for r in listing:
         try:
-            create_recipe(conn, r.get("name"), r.get("meals", []), r.get("ingredients", []), r.get("notes"),
-                          _alias_cache=alias_cache, _group_cache=group_cache)
+            create_recipe(
+                conn, r.get("name"), r.get("meals", []), r.get("ingredients", []), r.get("notes"),
+                _alias_cache=alias_cache, _group_cache=group_cache,
+            )
             created += 1
         except ValueError as e:
             errors.append(str(e))

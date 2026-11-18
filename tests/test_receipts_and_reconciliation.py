@@ -2791,5 +2791,158 @@ class TestReceiptEdgeCasesAndCorruptFiles(unittest.TestCase):
         self.assertEqual(parsa_righe(detail_only), [])
 
 
+# ======================================================================
+# Extracted from meal_planner/receipts/pipeline.py inline tests
+# ======================================================================
+
+def _box(x, y, w=100, h=30):
+    return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+
+_OCR_FINTO = [(_box(10, 100), "LENTICCHIE", 0.95), (_box(10, 150), "TOFU BIO", 0.3),
+              (_box(10, 190), "2 Cad", 0.9), (_box(10, 250), "BANANE", 0.9),
+              (_box(10, 290), "0,838 kg x 1,99", 0.9), (_box(10, 350), "SUBTOTALE", 0.9)]
+
+def _immagine_vuota(percorso: Path) -> None:
+    import cv2
+    import numpy as np
+    cv2.imencode(".png", np.full((1000, 1000), 255, np.uint8))[1].tofile(str(percorso))
+
+
+class TestReceiptPipelineStandalone(unittest.TestCase):
+    def test_leggi_voci_tutto_minuscolo(self):
+        from meal_planner.receipts import reader as ls
+        from meal_planner.receipts.pipeline import leggi_voci, SOGLIA_BASSA_CONFIDENZA
+        with patch.object(ls, "_esegui_ocr", return_value=_OCR_FINTO):
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td) / "s.png"
+                _immagine_vuota(p)
+                voci = leggi_voci(str(p))
+                self.assertEqual([(v.nome, v.qta, v.unita, v.confezioni) for v in voci], [
+                    ("lenticchie", "1", "pz", "1"), ("tofu bio", "1", "pz", "2"), ("banane", "0.838", "kg", "1")])
+                self.assertTrue(all(v.nome == v.nome.lower() for v in voci))
+                self.assertLess(voci[1].conf_ocr, SOGLIA_BASSA_CONFIDENZA)
+
+    def test_leggi_voci_file_inesistente(self):
+        from meal_planner.receipts.pipeline import leggi_voci
+        with self.assertRaises(RuntimeError):
+            leggi_voci("non_esiste.jpg")
+
+    def test_validazione_ok_virgola_e_maiuscole(self):
+        from meal_planner.receipts.pipeline import valida_voci, Voce
+        items, errori = valida_voci([Voce("  LATTE   Intero ", "1,5", "L", "2"), Voce("", "x", "", "")])
+        self.assertEqual(errori, [])
+        self.assertEqual(items, [("latte intero", 1.5, "l", 2)])
+
+    def test_validazione_errori(self):
+        from meal_planner.receipts.pipeline import valida_voci, Voce
+        _, errori = valida_voci([Voce("a", "abc"), Voce("b", "0"), Voce("c", "1", ""),
+                                 Voce("d", "1", "pz", "0"), Voce("e", "1", "pz", "x")])
+        self.assertEqual(len(errori), 5)
+        self.assertTrue(all(e == e.lower() for e in errori))
+
+    def test_scrittura_out_senza_maiuscole(self):
+        from meal_planner.receipts.pipeline import scrivi_out
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.txt"
+            scrivi_out([("Banane; Bio", 0.838, "KG", 1), ("uova", 6.0, "pz", 2)], out)
+            testo = out.read_text(encoding="utf-8")
+            self.assertEqual(testo, testo.lower())
+            self.assertEqual(testo.splitlines()[1], "uova;6;pz;2")
+
+    def test_scrittura_out_separatore_nel_nome_sostituito(self):
+        from meal_planner.receipts.pipeline import valida_voci, Voce, scrivi_out
+        with tempfile.TemporaryDirectory() as td:
+            items, _ = valida_voci([Voce("banane; bio", "1")])
+            scrivi_out(items, Path(td) / "o.txt")
+            self.assertEqual((Path(td) / "o.txt").read_text(), "banane bio;1;pz;1\n")
+
+    def test_main_senza_finestra(self):
+        from meal_planner.receipts import reader as ls
+        from meal_planner.receipts.pipeline import main
+        with patch.object(ls, "_esegui_ocr", return_value=_OCR_FINTO):
+            with tempfile.TemporaryDirectory() as td:
+                p, out = Path(td) / "s.png", Path(td) / "out.txt"
+                _immagine_vuota(p)
+                self.assertEqual(main([str(p), "--out", str(out), "--senza-finestra"]), 0)
+                self.assertEqual(out.read_text(encoding="utf-8"), "lenticchie;1;pz;1\ntofu bio;1;pz;2\nbanane;0.838;kg;1\n")
+
+    def test_main_file_mancante(self):
+        from meal_planner.receipts.pipeline import main
+        self.assertEqual(main(["non_esiste.png"]), 2)
+
+    def test_finestra_forza_minuscolo_e_salva(self):
+        import tkinter as tk
+        from meal_planner.receipts.pipeline import FinestraModifica, Voce
+        try:
+            root = tk.Tk()
+        except tk.TclError:
+            self.skipTest("No display available")
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "out.txt"
+                f = FinestraModifica(root, [Voce("pere", "1", "kg", "1", 0.2)], out, "Titolo Con Maiuscole")
+                self.assertEqual(root.title(), "titolo con maiuscole")
+                f.righe[0]["vars"]["nome"].set("PERE Abate")
+                self.assertEqual(f.righe[0]["vars"]["nome"].get(), "pere abate")
+                f.righe[0]["vars"]["qta"].set("0,5")
+                f.aggiungi_riga(Voce("riso", "boh"))
+                self.assertFalse(f.salva())
+                self.assertIn("invalid quantity", f.stato.get())
+                f.rimuovi_riga(f.righe[-1])
+                self.assertTrue(f.salva())
+                self.assertEqual(out.read_text(), "pere abate;0.5;kg;1\n")
+                self.assertEqual(f.stato.get(), f.stato.get().lower())
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+    def test_finestra_senza_articoli_ha_una_riga_vuota(self):
+        import tkinter as tk
+        from meal_planner.receipts.pipeline import FinestraModifica
+        try:
+            root = tk.Tk()
+        except tk.TclError:
+            self.skipTest("No display available")
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                f = FinestraModifica(root, [], Path(td) / "out.txt", "x")
+                self.assertEqual(len(f.righe), 1)
+                self.assertTrue(f.salva())
+                self.assertEqual((Path(td) / "out.txt").read_text(), "")
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+    def test_finestra_on_save_callback_e_chiusura(self):
+        import tkinter as tk
+        from meal_planner.receipts.pipeline import FinestraModifica, Voce
+        try:
+            root = tk.Tk()
+        except tk.TclError:
+            self.skipTest("No display available")
+        chiamate = []
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "out.txt"
+                voci = [Voce("latte", "1,5", "l", "2")]
+                f = FinestraModifica(root, voci, out, "test", on_save=lambda items: chiamate.append(items))
+                f.aggiungi_riga(Voce("pane", "non-valido"))
+                self.assertFalse(f.salva())
+                self.assertEqual(len(chiamate), 0)
+                f.rimuovi_riga(f.righe[-1])
+                self.assertTrue(f.salva())
+                self.assertEqual(chiamate, [[("latte", 1.5, "l", 2)]])
+                self.assertEqual(out.read_text(), "latte;1.5;l;2\n")
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
     unittest.main()

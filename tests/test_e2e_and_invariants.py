@@ -53,9 +53,9 @@ import meal_planner.config as cfg
 import meal_planner.inventory as inv
 import meal_planner.recipes as rec
 from meal_planner.gui.app import App
-from meal_planner.engine import catalog as engine_catalog
-from meal_planner.engine import profile as engine_profile
-from meal_planner.engine import nutrition as engine_nutrition
+from meal_planner import engine as engine_catalog
+from meal_planner import engine as engine_profile
+from meal_planner import engine as engine_nutrition
 
 # Contract function bindings (supports progressive discovery across milestones M1–M3)
 delete_inventory_item = getattr(inv, "delete_inventory_item", None)
@@ -649,7 +649,7 @@ class TestTier2BoundaryAndCornerCases(BaseE2ETestCase):
         conn.close()
 
         # Calculating estimates with unconfigured values should safely return None
-        from meal_planner.engine.profile import estimates
+        from meal_planner.engine import estimates
         calc, target, used = estimates({
             "Sex": None,
             "Activity_Level": None,
@@ -2471,7 +2471,7 @@ from meal_planner.db.connection import get_connection
 from meal_planner.db.schema import create_schema
 from meal_planner.db.schema import migrate
 from meal_planner.inventory import add_item, get_exclusion_list
-from meal_planner.planner.storage import schedule_meal_prep
+from meal_planner.planner import schedule_meal_prep
 
 
 class TestNewFeatures(unittest.TestCase):

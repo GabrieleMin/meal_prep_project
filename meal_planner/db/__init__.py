@@ -1,1 +1,1 @@
-"""Database layer: connection, base schema and recipe schema."""
+"""Database layer: connection and unified schema."""

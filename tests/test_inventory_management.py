@@ -615,7 +615,7 @@ import unittest
 from meal_planner.db.connection import get_connection
 from meal_planner.db.schema import create_schema
 from meal_planner.db.schema import migrate
-from meal_planner.engine.nutrition import recipe_macros
+from meal_planner.engine import recipe_macros
 from meal_planner.gui.app import App
 from meal_planner.gui.dialogs import InventoryItemEditDialog, MacroPromptDialog
 from meal_planner.inventory import (
@@ -2107,7 +2107,7 @@ import unittest
 from meal_planner.db.connection import get_connection
 from meal_planner.db.schema import create_schema
 from meal_planner.db.schema import migrate
-from meal_planner.engine.nutrition import recipe_macros
+from meal_planner.engine import recipe_macros
 from meal_planner.gui.dialogs import InventoryItemEditDialog, MacroPromptDialog
 from meal_planner.inventory import (
     AliasConflict,
@@ -2805,7 +2805,7 @@ import unittest
 from meal_planner.db.connection import get_connection
 from meal_planner.db.schema import create_schema
 from meal_planner.db.schema import migrate
-from meal_planner.engine.nutrition import recipe_macros
+from meal_planner.engine import recipe_macros
 from meal_planner.gui.app import App
 from meal_planner.gui.dialogs import InventoryItemEditDialog, MacroPromptDialog
 from meal_planner.gui.widgets import Table
@@ -3338,7 +3338,7 @@ class TestInventoryAdvancedEdgeCases(unittest.TestCase):
 
     def test_macro_propagation_decoupling_preserves_recipe_integrity(self):
         """Option 1 (propagate=False) decouples product ID and preserves recipe macros; Option 2 propagates."""
-        from meal_planner.engine.nutrition import recipe_macros
+        from meal_planner.engine import recipe_macros
 
         conn = get_connection(self.db_path)
         conn.execute(

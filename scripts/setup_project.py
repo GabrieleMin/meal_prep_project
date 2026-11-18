@@ -1,11 +1,11 @@
 """
 Project setup: create the database, load demo data, check integrity, run the tests.
 
-Usage (from the project root):
-    python -m scripts.setup_project              # first-time setup (skips what already exists)
-    python -m scripts.setup_project --test       # + run all test suites (on isolated databases)
-    python -m scripts.setup_project --reset -y   # WIPE products, inventory and recipes, reload demo data
-    python -m scripts.setup_project --launch     # at the end, open the application window
+Usage:
+    python -m scripts.setup_project              # first-time setup
+    python -m scripts.setup_project --test       # + run test suites
+    python -m scripts.setup_project --reset -y   # wipe & reload demo data
+    python -m scripts.setup_project --launch     # open the GUI at the end
 """
 
 import argparse
@@ -18,6 +18,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from meal_planner.db.connection import DB_PATH  # noqa: E402
+from scripts import seed_inventory, seed_recipes  # noqa: E402
 
 TEST_MODULES = (
     "tests.test_domain_core",
@@ -30,32 +31,23 @@ TEST_MODULES = (
 )
 
 
-def run(module, *args, env=None):
-    return subprocess.run([sys.executable, "-m", module, *args], cwd=ROOT, env=env).returncode == 0
+def run(module, *args):
+    return subprocess.run([sys.executable, "-m", module, *args], cwd=ROOT).returncode == 0
 
 
-def count(table):
+def _count(table):
     try:
-        conn = sqlite3.connect(DB_PATH)
-        try:
+        with sqlite3.connect(DB_PATH) as conn:
             return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        finally:
-            conn.close()
     except sqlite3.OperationalError:
         return 0
 
 
 def demo_recipes_possible():
-    """True if the database holds every product the demo recipes use."""
-    from scripts.seed_recipes import CONVERSIONS, RECIPES
-    names = set(CONVERSIONS) | {p for _, _, ingredients in RECIPES for p, _, _ in ingredients}
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        found = conn.execute(f"SELECT COUNT(*) FROM ALIASES WHERE Name IN ({','.join('?' * len(names))})",
-                             list(names)).fetchone()[0]
+    names = set(seed_recipes.CONVERSIONS) | {p for _, _, ings in seed_recipes.RECIPES for p, _, _ in ings}
+    with sqlite3.connect(DB_PATH) as conn:
+        found = conn.execute(f"SELECT COUNT(*) FROM ALIASES WHERE Name IN ({','.join('?' * len(names))})", list(names)).fetchone()[0]
         return found == len(names)
-    finally:
-        conn.close()
 
 
 def check_database():
@@ -65,8 +57,7 @@ def check_database():
         integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
         violations = conn.execute("PRAGMA foreign_key_check").fetchall()
         print(f"Database integrity: {integrity} | foreign key violations: {len(violations)}")
-        for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' "
-                                     "AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall():
+        for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"):
             print(f"  {table:<22}{conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]:>5} rows")
         return integrity == "ok" and not violations
     finally:
@@ -74,20 +65,26 @@ def check_database():
 
 
 def run_tests():
-    """Each suite runs in its own process; the inventory suite uses a throw-away database."""
     all_ok = True
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     for module in TEST_MODULES:
-        env = dict(os.environ, PYTHONIOENCODING="utf-8")
-        r = subprocess.run([sys.executable, "-m", module], cwd=ROOT, env=env, capture_output=True,
-                           text=True, encoding="utf-8", errors="replace")
+        r = subprocess.run([sys.executable, "-m", module], cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
         out = r.stdout + r.stderr
         ok = r.returncode == 0 and "Traceback" not in out and "FAILED (" not in out and "ERROR:" not in out
-        summary = [line for line in out.splitlines() if "tests passed" in line or line.startswith("Ran ")]
+        summary = [ln for ln in out.splitlines() if "tests passed" in ln or ln.startswith("Ran ")]
         print(f"{module}: {summary[-1] if summary else 'completed'} | {'ok' if ok else 'FAILED'}")
         if not ok:
             print(out[-3000:])
         all_ok = all_ok and ok
     return all_ok
+
+
+def _seed_step(fn, reset):
+    try:
+        fn(DB_PATH, reset)
+        return True
+    except SystemExit as exc:
+        return exc.code in (0, None)
 
 
 def main() -> int:
@@ -97,13 +94,11 @@ def main() -> int:
     parser.add_argument("--test", action="store_true", help="run all test suites")
     parser.add_argument("--launch", action="store_true", help="open the application window at the end")
     args = parser.parse_args()
-    if args.reset and not args.yes and input(
-            "--reset deletes ALL products, inventory and recipes. Type 'yes' to continue: ").strip().lower() != "yes":
+    if args.reset and not args.yes and input("--reset deletes ALL products, inventory and recipes. Type 'yes' to continue: ").strip().lower() != "yes":
         print("Cancelled.")
         return 1
 
     results = []
-
     def step(label, ok, notes=""):
         results.append((label, "OK" if ok is True else ok or "ERROR", notes))
         return ok is not False
@@ -118,22 +113,23 @@ def main() -> int:
 
     if not step("Database schema", run("meal_planner.db.schema")):
         return finish()
-    existing = count("PRODUCTS")
+    existing = _count("PRODUCTS")
     if args.reset:
-        if not (step("Demo products (reset)", run("scripts.seed_inventory", "--reset")) and
-                step("Demo recipes (reset)", run("scripts.seed_recipes", "--reset"))):
+        if not (step("Demo products (reset)", _seed_step(seed_inventory.seed, True)) and
+                step("Demo recipes (reset)", _seed_step(seed_recipes.seed, True))):
             return finish()
     else:
         if existing:
             step("Demo products", "SKIPPED", f"{existing} products already present")
-        elif not step("Demo products", run("scripts.seed_inventory")):
+        elif not step("Demo products", _seed_step(seed_inventory.seed, False)):
             return finish()
-        if count("RECIPES"):
+        if _count("RECIPES"):
             step("Demo recipes", "SKIPPED", "recipes already present")
         elif not demo_recipes_possible():
             step("Demo recipes", "SKIPPED", "demo products missing")
-        elif not step("Demo recipes", run("scripts.seed_recipes")):
+        elif not step("Demo recipes", _seed_step(seed_recipes.seed, False)):
             return finish()
+
     if not step("Database check", check_database()):
         return finish()
     if args.test:

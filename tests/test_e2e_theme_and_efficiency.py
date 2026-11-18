@@ -40,15 +40,15 @@ from meal_planner.db.schema import create_schema, migrate
 import meal_planner.config as cfg
 import meal_planner.inventory as inv
 import meal_planner.recipes as rec
-from meal_planner.engine import catalog as engine_catalog
-from meal_planner.engine import nutrition as engine_nutrition
-from meal_planner.engine import virtual_inventory as engine_vi
+from meal_planner import engine as engine_catalog
+from meal_planner import engine as engine_nutrition
+from meal_planner import engine as engine_vi
 from meal_planner.gui import widgets
 from meal_planner.gui.widgets import Table, create_delete_icon
 from meal_planner.gui.app import App
-from meal_planner.planner import cli as planner_cli
-from meal_planner.planner.day import plan_day
-from meal_planner.planner.week import plan_week
+from meal_planner import planner as planner_cli
+from meal_planner.planner import plan_day
+from meal_planner.planner import plan_week
 
 
 class BaseThemeAndEfficiencyE2ETestCase(unittest.TestCase):

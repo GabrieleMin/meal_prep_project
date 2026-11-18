@@ -1,3 +1,4 @@
-from meal_planner.engine.cli import main
+from meal_planner.engine.core import main
 
-main()
+if __name__ == "__main__":
+    main()
