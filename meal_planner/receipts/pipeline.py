@@ -94,9 +94,19 @@ def scrivi_out(items: Sequence[ls.ItemSpesa], percorso: Path) -> None:
 def applica_tema_app(root) -> str:
     """stesso tema (sv-ttk, chiaro/scuro da config.json) dell'app principale meal_planner."""
     try:
+        import tkinter as tk
+        import sv_ttk
         from meal_planner.gui import theme
         nome = theme.load()
-        theme.apply(nome)
+        tk_root = root
+        while tk_root is not None and not isinstance(tk_root, tk.Tk):
+            tk_root = getattr(tk_root, "master", None)
+        try:
+            current = sv_ttk.get_theme(tk_root)
+        except Exception:
+            current = None
+        if current != nome:
+            theme.apply(nome, root=tk_root)
         return nome
     except Exception:                   # sv-ttk assente: resta il tema ttk di default
         return "light"
@@ -116,15 +126,31 @@ class FinestraModifica:
         self.righe: List[dict] = []
 
         root.title(titolo.lower())
-        root.geometry("820x560")
-        root.minsize(640, 360)
         self.tema = applica_tema_app(root)
+        try:
+            from meal_planner.gui import system_info, theme
+            sf = theme.get_scale_factor(root)
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            gw, gh, mw, mh = system_info.clamp_geometry(
+                round(820 * sf), round(560 * sf), sw, sh, min_w=round(640 * sf), min_h=round(360 * sf)
+            )
+            root.geometry(f"{gw}x{gh}")
+            root.minsize(mw, mh)
+            title_font = theme.font("subhead", root)
+            header_font = theme.font("body_bold", root)
+        except Exception:
+            root.geometry("820x560")
+            root.minsize(640, 360)
+            title_font = None
+            header_font = None
+
         ttk.Style(root).configure("Attenzione.TEntry", foreground=COLORE_ATTENZIONE)
 
         intestazione = ttk.Frame(root, padding=(14, 12, 14, 0))
         intestazione.pack(fill="x")
-        ttk.Label(intestazione, text=titolo.lower(), anchor="w",
-                  font=("TkDefaultFont", 11, "bold")).pack(fill="x")
+        lbl_title_kw = {"font": title_font} if title_font is not None else {}
+        ttk.Label(intestazione, text=titolo.lower(), anchor="w", **lbl_title_kw).pack(fill="x")
         ttk.Label(intestazione, anchor="w", justify="left", wraplength=780,
                   text="Check and correct the fields below. An orange name marks an uncertain "
                        "reading. Rows with an empty name are ignored.").pack(fill="x", pady=(2, 6))
@@ -165,7 +191,8 @@ class FinestraModifica:
 
         for col, (testo, larg) in enumerate((("Item Name", 38), ("Quantity", 9), ("Unit", 7),
                                              ("Packages", 10))):
-            ttk.Label(self.interno, text=testo, anchor="w", font=("TkDefaultFont", 9, "bold")).grid(
+            lbl_h_kw = {"font": header_font} if header_font is not None else {}
+            ttk.Label(self.interno, text=testo, anchor="w", **lbl_h_kw).grid(
                 row=0, column=col, sticky="w", padx=4, pady=(2, 6))
 
         # ---- barra inferiore ----

@@ -89,6 +89,40 @@ def group_members(conn, group_id: int) -> list:
     return [r[0] for r in conn.execute("SELECT ID FROM GROUP_MEMBERS WHERE Group_ID = ? ORDER BY ID", (group_id,))]
 
 
+def load_recipe_ingredients(conn, recipe_ids=None) -> dict[int, list]:
+    """Batch-loads RECIPE_INGREDIENTS keyed by Recipe_ID, preserving Row_ID order."""
+    if recipe_ids is not None:
+        ids = [int(r) for r in recipe_ids]
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT Recipe_ID, ID, Group_ID, Quantity, Unit, To_Taste FROM RECIPE_INGREDIENTS "
+            f"WHERE Recipe_ID IN ({placeholders}) ORDER BY Recipe_ID, Row_ID",
+            ids,
+        ).fetchall()
+        grouped: dict[int, list] = {rid: [] for rid in ids}
+    else:
+        rows = conn.execute(
+            "SELECT Recipe_ID, ID, Group_ID, Quantity, Unit, To_Taste FROM RECIPE_INGREDIENTS "
+            "ORDER BY Recipe_ID, Row_ID"
+        ).fetchall()
+        grouped = {}
+    for rid, prod_id, gid, qty, unit, to_taste in rows:
+        grouped.setdefault(rid, []).append(
+            {"ID": prod_id, "Group_ID": gid, "Quantity": qty, "Unit": unit, "To_Taste": to_taste}
+        )
+    return grouped
+
+
+def load_group_members(conn) -> dict[int, list]:
+    """Batch-loads GROUP_MEMBERS keyed by Group_ID, preserving ID order."""
+    grouped: dict[int, list] = {}
+    for gid, pid in conn.execute("SELECT Group_ID, ID FROM GROUP_MEMBERS ORDER BY Group_ID, ID"):
+        grouped.setdefault(gid, []).append(pid)
+    return grouped
+
+
 def load_profile(conn=None, db_path: str = None) -> dict | None:
     with _conn_ctx(conn, db_path) as active_conn:
         cur = active_conn.execute(
@@ -329,9 +363,10 @@ class VirtualInventory:
         return {"consumed": to_cover, "shortfall": shortfall, "from_open": from_open, "packages_opened": opened}
 
 
-def _choose_member(conn, inv, products, group_id, quantity, unit):
+def _choose_member(conn, inv, products, group_id, quantity, unit, group_members_map=None):
     best = None
-    for product_id in group_members(conn, group_id):
+    members = group_members_map.get(group_id, []) if group_members_map is not None else group_members(conn, group_id)
+    for product_id in members:
         q = inventory_quantity(quantity, unit, products[product_id])
         if q is None:
             continue
@@ -343,7 +378,8 @@ def _choose_member(conn, inv, products, group_id, quantity, unit):
 
 
 def simulate_recipe(conn, inv: VirtualInventory, recipe_id: int, products: dict = None,
-                    servings: int = 1, choices: dict = None, ingredients: list = None) -> dict:
+                    servings: int = 1, choices: dict = None, ingredients: list = None,
+                    group_members_map: dict = None) -> dict:
     """Consumes the recipe from `inv` (which is MODIFIED; pass inv.copy() for a trial)."""
     products = products if products is not None else load_products(conn)
     choices = dict(choices or {})
@@ -354,7 +390,7 @@ def simulate_recipe(conn, inv: VirtualInventory, recipe_id: int, products: dict 
         if product_id is None:
             gid = ing["Group_ID"]
             if gid not in choices:
-                choices[gid] = _choose_member(conn, inv, products, gid, qty, ing["Unit"])
+                choices[gid] = _choose_member(conn, inv, products, gid, qty, ing["Unit"], group_members_map=group_members_map)
             product_id = choices[gid]
         if product_id is None:
             incomplete = True
@@ -515,11 +551,14 @@ def print_check(res):
 def cmd_recipes(conn):
     products, names = load_products(conn), product_names(conn)
     inv = VirtualInventory.from_db(conn)
+    all_ingredients = load_recipe_ingredients(conn)
+    all_groups = load_group_members(conn)
     print("Each recipe is simulated on the current inventory, independently of the others.")
     print(HEADER)
     for recipe_id, name in conn.execute("SELECT Recipe_ID, Name FROM RECIPES ORDER BY Recipe_ID").fetchall():
-        sim = simulate_recipe(conn, inv.copy(), recipe_id, products)
-        recipe_row(name, recipe_macros(conn, recipe_id, products, sim["group_choices"]), sim, products, names)
+        ings = all_ingredients.get(recipe_id, [])
+        sim = simulate_recipe(conn, inv.copy(), recipe_id, products, ingredients=ings, group_members_map=all_groups)
+        recipe_row(name, recipe_macros(conn, recipe_id, products, sim["group_choices"], ingredients=ings), sim, products, names)
 
 
 def cmd_day(conn, recipe_names, kcal):

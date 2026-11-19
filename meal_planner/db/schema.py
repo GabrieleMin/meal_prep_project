@@ -7,6 +7,25 @@ from meal_planner.db.connection import DB_PATH, get_connection
 
 SCHEMA_VERSION = 1
 
+
+class DatabaseIntegrityError(RuntimeError):
+    """Raised when SQLite integrity_check or foreign_key_check fails at startup."""
+
+
+def verify_integrity(conn: sqlite3.Connection) -> None:
+    """Runs PRAGMA integrity_check and PRAGMA foreign_key_check, raising DatabaseIntegrityError on failure."""
+    integrity_rows = conn.execute("PRAGMA integrity_check").fetchall()
+    if integrity_rows != [("ok",)]:
+        details = "; ".join(str(r[0]) for r in integrity_rows[:10]) or "unknown integrity error"
+        raise DatabaseIntegrityError(f"Database integrity check failed: {details}")
+
+    fk_rows = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if fk_rows:
+        details = "; ".join(
+            f"table={r[0]}, rowid={r[1]}, parent={r[2]}, fkid={r[3]}" for r in fk_rows[:10]
+        )
+        raise DatabaseIntegrityError(f"Database foreign key check failed: {details}")
+
 DEFAULT_MEALS = [("breakfast", 1, 25.0), ("lunch", 2, 40.0), ("dinner", 3, 35.0)]
 
 DEFAULT_GOALS = [
@@ -183,6 +202,11 @@ def _add_column(conn: sqlite3.Connection, table: str, column: str, ddl: str, exi
 
 def create_schema(conn: sqlite3.Connection) -> None:
     """Idempotently creates all tables, indices, views, migrations, and initial data."""
+    row = conn.execute("PRAGMA user_version").fetchone()
+    current_version = row[0] if row else 0
+    if current_version >= SCHEMA_VERSION and schema_exists(conn):
+        return
+
     cur = conn.cursor()
     for stmt in _TABLES:
         cur.execute(stmt)

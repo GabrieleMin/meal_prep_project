@@ -3277,10 +3277,12 @@ class TestProfileOverlayAndSettingsAdversarial(Tier5BaseTestCase):
             texts = [c.itemcget(it, "text") for it in c.find_all() if c.type(it) == "text"]
             self.assertTrue(any(vt in texts for vt in valid_titles), f"Verbatim string not found on canvas: {texts}")
 
-            # Verify card polygon
+            # Verify crisp image card (no un-antialiased canvas polygon)
             polygons = [it for it in c.find_all() if c.type(it) == "polygon"]
-            self.assertGreater(len(polygons), 0, "Overlay must contain a card polygon")
-            tags = c.gettags(polygons[0])
+            self.assertEqual(len(polygons), 0, "Overlay card must not use un-antialiased canvas polygon")
+            images = [it for it in c.find_all() if c.type(it) == "image"]
+            self.assertGreater(len(images), 0, "Overlay must contain an anti-aliased card image")
+            tags = c.gettags(images[0])
             self.assertIn("overlay_card", tags)
 
             # Verify button window

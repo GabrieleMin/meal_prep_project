@@ -30,10 +30,14 @@ def _invalidate_cache() -> None:
 def _get_db_conn():
     from meal_planner.db.connection import get_connection
     conn = get_connection()
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS APP_SETTINGS ("
-        "Key TEXT PRIMARY KEY, Value TEXT NOT NULL, Updated_At TEXT DEFAULT (datetime('now', 'localtime')))"
-    )
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='APP_SETTINGS'"
+    ).fetchone()
+    if not has_table:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS APP_SETTINGS ("
+            "Key TEXT PRIMARY KEY, Value TEXT NOT NULL, Updated_At TEXT DEFAULT (datetime('now', 'localtime')))"
+        )
     return conn
 
 

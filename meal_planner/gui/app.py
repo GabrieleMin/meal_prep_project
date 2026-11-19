@@ -6,6 +6,8 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import contextlib
 import io
 import os
+import sqlite3
+import sys
 import threading
 import tkinter as tk
 from typing import Optional
@@ -19,13 +21,13 @@ except (ImportError, Exception):
 _RECEIPT_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 
 from meal_planner import config, engine as m, planner as pf, recipes as rc
-from meal_planner.db.schema import migrate
+from meal_planner.db.schema import DatabaseIntegrityError, migrate
 from meal_planner.engine import bmi, estimates, reset_profile, set_meal_shares, update_profile
-from meal_planner.gui import theme
+from meal_planner.gui import system_info, theme
 from meal_planner.gui.dialogs import (
     AddRecipeDialog, AliasMapDialog, ChoiceDialog, InventoryItemEditDialog,
     MealPrepDialog, ProductDialog, ProfileSetupDialog, ReceiptReconciliationDialog,
-    RecipeDetailsDialog, RecipeGeneratorDialog,
+    RecipeDetailsDialog,
 )
 from meal_planner.gui.support import GREEN, RED, db, number, safe
 from meal_planner.gui.widgets import Form, LineChart, Table
@@ -39,16 +41,31 @@ from meal_planner.inventory import (
 
 class App(BaseTk):
     def __init__(self):
+        system_info.enable_windows_dpi_awareness()
         super().__init__()
         self.title("Meal Planner")
-        self.geometry("1140x700")
-        self.minsize(920, 580)
-        self.theme = theme.load()
-        theme.apply(self.theme)
-        ttk.Style(self).configure("Treeview", rowheight=28)
-        with db() as c:
-            migrate(c)
         self.db_path = None
+        self._startup_alert_timer = None
+        self._overlay_draw_job = None
+        self._init_and_verify_database()
+
+        self.system_info = system_info.collect_system_info(self)
+        system_info.apply_tk_scaling(self, self.system_info)
+        sf = self.system_info.scale_factor
+        w, h, mw, mh = system_info.clamp_geometry(
+            round(1140 * sf),
+            round(700 * sf),
+            self.system_info.screen_width_px,
+            self.system_info.screen_height_px,
+            min_w=round(920 * sf),
+            min_h=round(580 * sf),
+        )
+        self.geometry(f"{w}x{h}")
+        self.minsize(mw, mh)
+
+        self.theme = theme.load()
+        theme.apply(self.theme, root=self, scale_factor=sf)
+
         self.plans, self.draft, self.fixed = [], [], {}
         self._cached_recipe_rows = None
         self.status = tk.StringVar(value="Ready.")
@@ -65,15 +82,58 @@ class App(BaseTk):
             self.nb.add(tab, text=title)
             build(tab)
         self.nb.select(0)
+        self._last_selected_tab = "Pantry"
         self.bar = ttk.Label(self, textvariable=self.status, anchor="w", padding=6)
         self.bar.pack(fill="x")
-        self.nb.bind("<<NotebookTabChanged>>", lambda e: self.on_tab_changed())
-        with db() as c:
-            self.load_profile_form(m.load_profile(c))
         self.refresh()
-        self.set_theme(self.theme)
-        self.nb.select(0)
+        self._apply_theme_widgets(self.theme)
+        self.update_idletasks()
+        self.nb.bind("<<NotebookTabChanged>>", lambda e: self.on_tab_changed())
         self._startup_alert_timer = self.after(200, self._startup_expiration_alert)
+
+    def _init_and_verify_database(self):
+        try:
+            with db() as c:
+                integrity_rows = c.execute("PRAGMA integrity_check").fetchall()
+                if integrity_rows != [("ok",)]:
+                    details = "; ".join(str(r[0]) for r in integrity_rows[:10]) or "unknown integrity error"
+                    raise DatabaseIntegrityError(f"Database integrity check failed: {details}")
+                migrate(c)
+                fk_rows = c.execute("PRAGMA foreign_key_check").fetchall()
+                if fk_rows:
+                    details = "; ".join(
+                        f"table={r[0]}, rowid={r[1]}, parent={r[2]}, fkid={r[3]}" for r in fk_rows[:10]
+                    )
+                    raise DatabaseIntegrityError(f"Database foreign key check failed: {details}")
+        except DatabaseIntegrityError as exc:
+            try:
+                messagebox.showerror(
+                    "Database Integrity Error",
+                    f"The application database failed integrity verification and cannot start:\n\n{exc}",
+                    parent=self,
+                )
+            except Exception:
+                pass
+            try:
+                self.destroy()
+            except Exception:
+                pass
+            raise
+        except sqlite3.Error as exc:
+            err = DatabaseIntegrityError(f"Database startup error: {exc}")
+            try:
+                messagebox.showerror(
+                    "Database Integrity Error",
+                    f"The application database could not be opened or verified:\n\n{exc}",
+                    parent=self,
+                )
+            except Exception:
+                pass
+            try:
+                self.destroy()
+            except Exception:
+                pass
+            raise err from exc
 
     def _resolve_db_path(self) -> Optional[str]:
         return getattr(self, "db_path", None) or os.environ.get("MEAL_PLANNER_DB")
@@ -109,6 +169,12 @@ class App(BaseTk):
             except Exception:
                 pass
             self._startup_alert_timer = None
+        if getattr(self, "_overlay_draw_job", None):
+            try:
+                self.after_cancel(self._overlay_draw_job)
+            except Exception:
+                pass
+            self._overlay_draw_job = None
         super().destroy()
 
     def _startup_expiration_alert(self):
@@ -132,9 +198,7 @@ class App(BaseTk):
         except Exception:
             pass
 
-    def set_theme(self, name):
-        self.theme = name
-        theme.apply(name)
+    def _apply_theme_widgets(self, name):
         for w in (self.text, getattr(self, "_receipt_log", None), getattr(self, "lbl_full_overview_text", None)):
             if isinstance(w, tk.Text):
                 theme.style_text(w, name)
@@ -149,6 +213,11 @@ class App(BaseTk):
             self._draw_profile_overlay()
         self.chart.plot(self.chart.points, *theme.palette(name))
         self.toggle.configure(text="Light mode" if name == "dark" else "Dark mode")
+
+    def set_theme(self, name):
+        self.theme = name
+        theme.apply(name, root=self)
+        self._apply_theme_widgets(name)
 
     def toggle_theme(self):
         """Toggles theme in real time for the current session without modifying default startup theme."""
@@ -168,7 +237,7 @@ class App(BaseTk):
             [("n", "Product", 200), ("q", "Available", 90), ("u", "Unit", 55),
              ("l", "Location", 110), ("e", "Expires", 95)],
             18, show_delete=True, on_delete=self._on_delete_inventory_row,
-            on_select=self._on_edit_inventory_row, on_double_click=self._on_edit_inventory_row,
+            on_double_click=self._on_edit_inventory_row,
             is_dark=(self.theme == "dark"),
         )
         self.t_disp.grid(row=0, column=1, sticky="nsew")
@@ -178,7 +247,7 @@ class App(BaseTk):
 
         sel_frame = ttk.LabelFrame(side, text="Pantry actions", padding=6)
         sel_frame.pack(fill="x", pady=(0, 6))
-        ttk.Label(sel_frame, text="Select an action to show its form:", font=("TkDefaultFont", 8, "italic"), anchor="w").pack(fill="x", pady=(0, 4))
+        ttk.Label(sel_frame, text="Select an action to show its form:", font=theme.font("caption_italic", self), anchor="w").pack(fill="x", pady=(0, 4))
 
         btn_grid = ttk.Frame(sel_frame)
         btn_grid.pack(fill="x")
@@ -216,7 +285,9 @@ class App(BaseTk):
 
         rec_mgr = ttk.LabelFrame(side, text="Receipts", padding=6)
         rec_mgr.pack(fill="x")
-        drop_h = 70
+        drop_h = theme.scale_px(70, self)
+        off_top = theme.scale_px(10, self)
+        off_bot = theme.scale_px(12, self)
         bg, fg = theme.palette(self.theme)
         self._drop_zone = tk.Canvas(
             rec_mgr, height=drop_h, highlightthickness=2,
@@ -224,11 +295,13 @@ class App(BaseTk):
         )
         self._drop_zone.pack(fill="x", pady=(0, 4))
         self._drop_label_id = self._drop_zone.create_text(
-            120, drop_h // 2 - 10, text="⬇  Drag receipts here  ⬇", font=("TkDefaultFont", 10, "bold"), anchor="center", fill=fg,
+            theme.scale_px(120, self), drop_h // 2 - off_top,
+            text="⬇  Drag receipts here  ⬇", font=theme.font("body_bold", self), anchor="center", fill=fg,
         )
         self._drop_hint_id = self._drop_zone.create_text(
-            120, drop_h // 2 + 12, text="or click to browse" if HAS_DND else "(click to browse image)",
-            font=("TkDefaultFont", 8), anchor="center", fill="#888888",
+            theme.scale_px(120, self), drop_h // 2 + off_bot,
+            text="or click to browse" if HAS_DND else "(click to browse image)",
+            font=theme.font("caption", self), anchor="center", fill="#888888",
         )
         if HAS_DND:
             try:
@@ -238,10 +311,10 @@ class App(BaseTk):
                 pass
 
         def _recenter(e):
-            w = e.width if e.width > 1 else 160
-            self._drop_zone.coords(self._drop_label_id, w // 2, drop_h // 2 - 10)
+            w = e.width if e.width > 1 else theme.scale_px(160, self)
+            self._drop_zone.coords(self._drop_label_id, w // 2, drop_h // 2 - off_top)
             if hasattr(self, "_drop_hint_id"):
-                self._drop_zone.coords(self._drop_hint_id, w // 2, drop_h // 2 + 12)
+                self._drop_zone.coords(self._drop_hint_id, w // 2, drop_h // 2 + off_bot)
 
         self._drop_zone.bind("<Configure>", _recenter)
         self._drop_zone.bind("<Button-1>", lambda e: self.receipt_browse())
@@ -250,12 +323,12 @@ class App(BaseTk):
         browse_bar.pack(fill="x", pady=(0, 4))
         ttk.Button(browse_bar, text="Browse files...", command=self.receipt_browse).pack(side="left")
         self._receipt_status = tk.StringVar(value="")
-        ttk.Label(browse_bar, textvariable=self._receipt_status, font=("TkDefaultFont", 8), anchor="w").pack(side="left", padx=(6, 0))
+        ttk.Label(browse_bar, textvariable=self._receipt_status, font=theme.font("caption", self), anchor="w").pack(side="left", padx=(6, 0))
 
         self._last_receipt_var = tk.StringVar(value="Last receipt loaded: None")
         self._receipt_log_text = ""
         self.lbl_last_receipt = ttk.Label(
-            rec_mgr, textvariable=self._last_receipt_var, font=("TkDefaultFont", 8, "italic"), anchor="w", padding=(2, 4),
+            rec_mgr, textvariable=self._last_receipt_var, font=theme.font("caption_italic", self), anchor="w", padding=(2, 4),
         )
         self.lbl_last_receipt.pack(fill="x", pady=(2, 0))
 
@@ -283,7 +356,7 @@ class App(BaseTk):
             header_bar,
             text="Macronutrients per serving and feasibility with current inventory "
                  "('Open' = share from open packages). Double-click for details.",
-            font=("TkDefaultFont", 9),
+            font=theme.font("body", self),
         ).pack(side="left")
 
         self.t_ric = Table(
@@ -298,7 +371,6 @@ class App(BaseTk):
         bar.grid(row=2, column=0, sticky="ew")
         for idx, (attr, text, cmd) in enumerate((
             ("btn_add_recipe", "➕ New Recipe...", self.open_add_recipe_dialog),
-            ("btn_generate_recipe", "✨ Generate Recipe...", self.open_recipe_generator_dialog),
             ("btn_details_recipe", "👁️ Recipe Details...", self.open_recipe_details),
             ("btn_import_recipes", "📂 Import from file (.json / .csv)...", self.import_recipes),
             ("btn_delete_recipe", "🗑️ Delete Selected Recipe", self.delete_recipe),
@@ -408,43 +480,183 @@ class App(BaseTk):
     def _init_profile_overlay(self, parent):
         """Initializes empty-state overlay covering the profile tab."""
         self.profile_overlay = tk.Canvas(parent, highlightthickness=0, borderwidth=0)
-        self.profile_overlay.bind("<Configure>", lambda e: self._draw_profile_overlay())
+        self._overlay_draw_job = None
+        self._overlay_last_size = None
+        self._overlay_card_photo = None
+        self._overlay_card_photo_key = None
+        self._overlay_card_id = None
+        self._overlay_title_id = None
+        self._overlay_sub_id = None
+        self._overlay_btn_win_id = None
+        self._overlay_btn = ttk.Button(
+            self.profile_overlay,
+            text="➕ Add Profile",
+            command=self.open_profile_setup_dialog,
+        )
+        self.profile_overlay.bind("<Configure>", self._on_profile_overlay_configure)
+
+    def _on_profile_overlay_configure(self, event=None):
+        c = self.profile_overlay
+        try:
+            w = int(getattr(event, "width", 0) or c.winfo_width())
+            h = int(getattr(event, "height", 0) or c.winfo_height())
+        except Exception:
+            return
+        if w <= 1 or h <= 1:
+            return
+        if self._overlay_last_size == (w, h):
+            return
+        if getattr(self, "_overlay_draw_job", None) is not None:
+            try:
+                self.after_cancel(self._overlay_draw_job)
+            except Exception:
+                pass
+            self._overlay_draw_job = None
+        self._overlay_draw_job = self.after(40, self._debounced_draw_profile_overlay)
+
+    def _debounced_draw_profile_overlay(self):
+        self._overlay_draw_job = None
+        try:
+            if self.winfo_exists() and hasattr(self, "profile_overlay") and self.profile_overlay.winfo_exists():
+                self._draw_profile_overlay()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _render_overlay_card_photo(master, width: int, height: int, radius: int, border_w: int, fill: str, outline: str):
+        from PIL import Image, ImageDraw, ImageTk
+        supersample = 4
+        sw, sh = max(4, width * supersample), max(4, height * supersample)
+        sr = max(4, radius * supersample)
+        sb = max(1, border_w * supersample)
+        im = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.rounded_rectangle(
+            (sb, sb, sw - 1 - sb, sh - 1 - sb),
+            radius=sr,
+            fill=fill,
+            outline=outline,
+            width=sb,
+        )
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        im_resized = im.resize((width, height), resample)
+        return ImageTk.PhotoImage(im_resized, master=master)
 
     def _draw_profile_overlay(self):
-        """Draws the rounded card and empty-state prompt on the profile overlay canvas."""
+        """Draws the anti-aliased rounded card and empty-state prompt on the profile overlay canvas."""
+        if getattr(self, "_overlay_draw_job", None) is not None:
+            try:
+                self.after_cancel(self._overlay_draw_job)
+            except Exception:
+                pass
+            self._overlay_draw_job = None
+
         c = self.profile_overlay
-        c.delete("all")
-        for child in c.winfo_children():
-            child.destroy()
         w, h = c.winfo_width(), c.winfo_height()
         if w <= 1 or h <= 1:
             ref = getattr(self, "tab_profile_frame", c)
-            w, h = max(ref.winfo_width(), 700), max(ref.winfo_height(), 500)
+            w, h = max(ref.winfo_width(), theme.scale_px(700, self)), max(ref.winfo_height(), theme.scale_px(500, self))
+        self._overlay_last_size = (w, h)
 
+        theme_name = getattr(self, "theme", "dark")
+        sp = theme.surface_palette(theme_name)
         bg, fill, outline, fg, sub_fg = (
-            ("#1e222b", "#282c37", "#3f4656", "#f9fafb", "#9ca3af")
-            if getattr(self, "theme", "dark") == "dark"
-            else ("#f3f4f6", "#ffffff", "#cbd5e1", "#111827", "#6b7280")
+            sp["bg"], sp["card_bg"], sp["card_border"], sp["fg"], sp["sub_fg"]
         )
         c.configure(bg=bg)
 
-        cw, ch, r = min(560, max(360, w - 80)), min(280, max(200, h - 80)), 22
-        x1, y1 = (w - cw) / 2, (h - ch) / 2
-        x2, y2 = x1 + cw, y1 + ch
-        points = [
-            x1 + r, y1, x1 + r, y1, x2 - r, y1, x2 - r, y1, x2, y1,
-            x2, y1 + r, x2, y1 + r, x2, y2 - r, x2, y2 - r, x2, y2,
-            x2 - r, y2, x2 - r, y2, x1 + r, y2, x1 + r, y2, x1, y2,
-            x1, y2 - r, x1, y2 - r, x1, y1 + r, x1, y1 + r, x1, y1,
-        ]
-        c.create_polygon(points, fill=fill, outline=outline, width=2, smooth=True, tags=("overlay_card",))
-        c.create_text((x1 + x2) / 2, y1 + ch * 0.35, text="Hello, add your profile to get started",
-                      fill=fg, font=("TkDefaultFont", 15, "bold"), justify="center", tags=("overlay_text", "overlay_card"))
-        c.create_text((x1 + x2) / 2, y1 + ch * 0.54,
-                      text="Set up your profile to calculate caloric needs and start planning meals.",
-                      fill=sub_fg, font=("TkDefaultFont", 10), justify="center", width=cw - 60, tags=("overlay_card",))
-        btn = ttk.Button(c, text="➕ Add Profile", command=self.open_profile_setup_dialog)
-        c.create_window((x1 + x2) / 2, y1 + ch * 0.76, window=btn, tags=("overlay_btn",))
+        sf = theme.get_scale_factor(self)
+        cw = min(round(560 * sf), max(round(360 * sf), w - round(80 * sf)))
+        ch = min(round(280 * sf), max(round(200 * sf), h - round(80 * sf)))
+        r = max(8, round(22 * sf))
+        border_w = max(1, round(2 * sf))
+        cx, cy = w / 2.0, h / 2.0
+        y1 = cy - ch / 2.0
+
+        existing = set(c.find_all())
+        if (
+            self._overlay_card_id not in existing
+            or self._overlay_title_id not in existing
+            or self._overlay_sub_id not in existing
+            or self._overlay_btn_win_id not in existing
+        ):
+            c.delete("all")
+            self._overlay_card_id = None
+            self._overlay_title_id = None
+            self._overlay_sub_id = None
+            self._overlay_btn_win_id = None
+
+        photo_key = (cw, ch, r, border_w, fill, outline)
+        if self._overlay_card_photo is None or self._overlay_card_photo_key != photo_key:
+            try:
+                self._overlay_card_photo = self._render_overlay_card_photo(
+                    c, cw, ch, r, border_w, fill, outline
+                )
+                self._overlay_card_photo_key = photo_key
+            except Exception:
+                self._overlay_card_photo = None
+                self._overlay_card_photo_key = None
+
+        if self._overlay_card_photo is not None:
+            if self._overlay_card_id is None or c.type(self._overlay_card_id) != "image":
+                if self._overlay_card_id is not None:
+                    c.delete(self._overlay_card_id)
+                self._overlay_card_id = c.create_image(
+                    cx, cy, image=self._overlay_card_photo, anchor="center", tags=("overlay_card",)
+                )
+            else:
+                c.coords(self._overlay_card_id, cx, cy)
+                c.itemconfig(self._overlay_card_id, image=self._overlay_card_photo)
+        else:
+            x1, x2, y2 = cx - cw / 2.0, cx + cw / 2.0, y1 + ch
+            if self._overlay_card_id is None or c.type(self._overlay_card_id) != "rectangle":
+                if self._overlay_card_id is not None:
+                    c.delete(self._overlay_card_id)
+                self._overlay_card_id = c.create_rectangle(
+                    x1, y1, x2, y2, fill=fill, outline=outline, width=border_w, tags=("overlay_card",)
+                )
+            else:
+                c.coords(self._overlay_card_id, x1, y1, x2, y2)
+                c.itemconfig(self._overlay_card_id, fill=fill, outline=outline, width=border_w)
+
+        title_font = theme.font("overlay_title", self)
+        sub_font = theme.font("body", self)
+        sub_width = max(120, cw - round(60 * sf))
+
+        if self._overlay_title_id is None:
+            self._overlay_title_id = c.create_text(
+                cx, y1 + ch * 0.35,
+                text="Hello, add your profile to get started",
+                fill=fg, font=title_font, justify="center",
+                tags=("overlay_text", "overlay_card"),
+            )
+        else:
+            c.coords(self._overlay_title_id, cx, y1 + ch * 0.35)
+            c.itemconfig(self._overlay_title_id, fill=fg, font=title_font)
+
+        if self._overlay_sub_id is None:
+            self._overlay_sub_id = c.create_text(
+                cx, y1 + ch * 0.54,
+                text="Set up your profile to calculate caloric needs and start planning meals.",
+                fill=sub_fg, font=sub_font, justify="center", width=sub_width,
+                tags=("overlay_card",),
+            )
+        else:
+            c.coords(self._overlay_sub_id, cx, y1 + ch * 0.54)
+            c.itemconfig(self._overlay_sub_id, fill=sub_fg, font=sub_font, width=sub_width)
+
+        if not hasattr(self, "_overlay_btn") or not self._overlay_btn.winfo_exists():
+            self._overlay_btn = ttk.Button(
+                c, text="➕ Add Profile", command=self.open_profile_setup_dialog
+            )
+
+        if self._overlay_btn_win_id is None:
+            self._overlay_btn_win_id = c.create_window(
+                cx, y1 + ch * 0.76, window=self._overlay_btn, tags=("overlay_btn",)
+            )
+        else:
+            c.coords(self._overlay_btn_win_id, cx, y1 + ch * 0.76)
+
         c.tag_bind("overlay_card", "<Button-1>", lambda e: self.open_profile_setup_dialog())
         c.tag_bind("overlay_card", "<Enter>", lambda e: c.config(cursor="hand2"))
         c.tag_bind("overlay_card", "<Leave>", lambda e: c.config(cursor=""))
@@ -550,7 +762,7 @@ class App(BaseTk):
         })
         if theme_val != self.theme:
             self.set_theme(theme_val)
-        self.refresh(active_tab="Pantry")
+        self.refresh(tabs={"Pantry"}, select_tab=False)
         self.msg("Configuration saved successfully.")
 
     def _build_sec_full_profile(self, parent):
@@ -604,17 +816,17 @@ class App(BaseTk):
                 if target:
                     cur.execute("UPDATE PROFILE SET Kcal_target = ? WHERE ID = 1", (target,))
                     c.commit()
-            self.msg("Static profile updated.")
-            self.refresh()
-            self._refresh_full_profile_view()
+        self.msg("Static profile updated.")
+        self.refresh(tabs={"Profile"}, select_tab=False)
+        self._refresh_full_profile_view()
 
-    def _refresh_full_profile_view(self):
+    def _refresh_full_profile_view(self, conn=None):
         if not hasattr(self, "lbl_full_overview_text"):
             return
         self.lbl_full_overview_text.configure(state="normal")
         self.lbl_full_overview_text.delete("1.0", "end")
 
-        with db() as c:
+        with (contextlib.nullcontext(conn) if conn is not None else db()) as c:
             p = m.load_profile(c)
             if not p or (not p.get("Sex") and not p.get("Height_cm") and not p.get("Weight_kg")):
                 self._set_static_vars("", "")
@@ -669,19 +881,19 @@ class App(BaseTk):
     def _build_sec_receipt_logs(self, parent):
         top_bar = ttk.Frame(parent)
         top_bar.pack(fill="x", padx=4, pady=4)
-        ttk.Label(top_bar, text="History of Imported Receipts:", font=("TkDefaultFont", 9, "bold")).pack(side="left")
+        ttk.Label(top_bar, text="History of Imported Receipts:", font=theme.font("body_bold", self)).pack(side="left")
         ttk.Button(top_bar, text="Refresh Logs", command=self._refresh_receipt_logs_table).pack(side="right")
         self.t_receipt_logs = Table(parent, [("t", "Time", 120), ("d", "Day", 120), ("f", "File Name", 360)], 20)
         self.t_receipt_logs.pack(fill="both", expand=True, padx=4, pady=(0, 4))
 
-    def _refresh_receipt_logs_table(self):
+    def _refresh_receipt_logs_table(self, conn=None):
         if hasattr(self, "t_receipt_logs"):
-            with db() as c:
+            with (contextlib.nullcontext(conn) if conn is not None else db()) as c:
                 logs = get_receipt_logs(c)
             self.t_receipt_logs.fill([((t, d, f), None) for t, d, f in logs])
 
     def _build_sec_destructive_actions(self, parent):
-        ttk.Label(parent, text="⚠️ DANGER ZONE: Destructive Data Management", font=("TkDefaultFont", 11, "bold"), foreground=RED).pack(anchor="w", padx=4, pady=(8, 4))
+        ttk.Label(parent, text="⚠️ DANGER ZONE: Destructive Data Management", font=theme.font("subhead", self), foreground=RED).pack(anchor="w", padx=4, pady=(8, 4))
         ttk.Label(
             parent,
             text="Actions in this section permanently delete data from your local database.\nEach operation requires explicit confirmation before execution.",
@@ -711,7 +923,8 @@ class App(BaseTk):
             return
         with db() as c:
             clear_inventory(c)
-        self.refresh(active_tab="Pantry")
+        self._recipes_dirty = True
+        self.refresh(tabs={"Pantry"}, select_tab=False)
         self.msg("Entire inventory has been permanently deleted.", error=True)
 
     def on_reset_profile(self):
@@ -734,7 +947,7 @@ class App(BaseTk):
         for k, val in (("Kcal_tolerance_pct", "5"), ("Open_extra_pct", "5"), ("No_repeat_days", "3"), ("Default_servings", "1")):
             self.pv[k].set(val)
         self._set_static_vars("", "")
-        self.refresh()
+        self.refresh(tabs={"Profile"}, select_tab=False)
         self._refresh_full_profile_view()
         self.msg("User profile has been reset.", error=True)
 
@@ -753,10 +966,13 @@ class App(BaseTk):
 
     def on_tab_changed(self):
         try:
-            current_tab = self.nb.tab(self.nb.select(), "text")
+            current_tab = self._norm_tab_name(self.nb.tab(self.nb.select(), "text"))
         except Exception:
             current_tab = None
-        self.refresh(active_tab=current_tab)
+        if current_tab is not None and current_tab == getattr(self, "_last_selected_tab", None):
+            return
+        self._last_selected_tab = current_tab
+        self.refresh(active_tab=current_tab, select_tab=False)
 
     # ---------------- refresh ----------------
 
@@ -770,58 +986,79 @@ class App(BaseTk):
         except ValueError:
             return None
 
-    def refresh(self, active_tab=None):
+    @staticmethod
+    def _norm_tab_name(name: Optional[str]) -> Optional[str]:
+        if name is None:
+            return None
+        if name in ("Profile", "Profilo"):
+            return "Profile"
+        if name in ("Settings", "Setting"):
+            return "Settings"
+        return name
+
+    def refresh(self, active_tab=None, *, select_tab: bool = True, tabs=None):
         current_tab = None
         if hasattr(self, "nb"):
             try:
-                current_tab = self.nb.tab(self.nb.select(), "text")
+                current_tab = self._norm_tab_name(self.nb.tab(self.nb.select(), "text"))
             except Exception:
                 pass
-        if active_tab is not None and hasattr(self, "nb") and not getattr(self, "_syncing_tab", False):
-            target_title = "Profile" if active_tab in ("Profile", "Profilo") else ("Settings" if active_tab in ("Setting", "Settings") else active_tab)
-            aliases = ("Profile", "Profilo") if target_title == "Profile" else (("Settings", "Setting") if target_title == "Settings" else (target_title,))
+        norm_active = self._norm_tab_name(active_tab)
+        if select_tab and norm_active is not None and hasattr(self, "nb") and not getattr(self, "_syncing_tab", False):
+            aliases = ("Profile", "Profilo") if norm_active == "Profile" else (("Settings", "Setting") if norm_active == "Settings" else (norm_active,))
             self._select_tab(*aliases)
+            current_tab = norm_active
+            self._last_selected_tab = norm_active
+
+        if tabs is not None:
+            raw_tabs = [tabs] if isinstance(tabs, str) else list(tabs)
+            target_tabs = {self._norm_tab_name(t) for t in raw_tabs if t is not None}
+        elif norm_active is not None:
+            target_tabs = {norm_active}
+        else:
+            target_tabs = {"Pantry", "Shopping", "Recipes", "Plan", "Profile", "Settings"}
 
         with db() as c:
-            if active_tab in (None, "Pantry", "Recipes"):
+            if target_tabs & {"Pantry", "Recipes"}:
                 names = [r[0] for r in c.execute("SELECT Name FROM ALIASES ORDER BY Name")]
-                for form in (self.f_add, self.f_use):
-                    form.w["name"]["values"] = names
-                locations = get_locations()
-                self.cb_loc["values"] = locations
-                self.f_add.w["location"]["values"] = locations
+                if "Pantry" in target_tabs:
+                    for form in (self.f_add, self.f_use):
+                        form.w["name"]["values"] = names
+                    locations = get_locations(db_path=self.db_path, conn=c)
+                    self.cb_loc["values"] = locations
+                    self.f_add.w["location"]["values"] = locations
 
-            if active_tab in (None, "Recipes"):
-                groups = [r[0] for r in c.execute("SELECT Name FROM SUBSTITUTE_GROUPS ORDER BY Name")]
-                if active_tab == "Recipes":
-                    names = [r[0] for r in c.execute("SELECT Name FROM ALIASES ORDER BY Name")]
-                if getattr(self, "f_ing", None):
+                if "Recipes" in target_tabs and getattr(self, "f_ing", None):
+                    groups = [r[0] for r in c.execute("SELECT Name FROM SUBSTITUTE_GROUPS ORDER BY Name")]
                     self.f_ing.w["p"]["values"] = names + groups
 
-            if active_tab in (None, "Pantry"):
+            if "Pantry" in target_tabs:
                 today = date.today()
                 warn_days = int(config.get("expiration_warning_days", 7))
                 self.t_disp.fill([
                     ((r["Name"], f"{r['Total_Available_Weight']:g}", r["Unit"], r["Location"], r.get("Expiration_Date") or ""),
                      self._exp_tag(r.get("Expiration_Date"), today, warn_days), r["Row_ID"])
-                    for r in get_inventory_rows(self.db_path)
+                    for r in get_inventory_rows(self.db_path, conn=c)
                 ])
 
-            if active_tab in (None, "Shopping"):
+            if "Shopping" in target_tabs:
                 shopping = c.execute("SELECT Name, Missing_Quantity, Unit FROM SHOPPING_LIST_VIEW ORDER BY Name").fetchall()
                 self.t_shopping.fill([((n, f"{q:.2f}", u), None) for n, q, u in shopping])
 
-            target_tab = active_tab if active_tab is not None else current_tab
-            if target_tab == "Recipes" or (active_tab is None and not self.t_ric.tv.get_children() and self._cached_recipe_rows is None):
-                if target_tab != "Recipes" or getattr(self, "_recipes_dirty", False) or self._cached_recipe_rows is None:
+            explicit_recipes = (tabs is not None and "Recipes" in target_tabs)
+            on_recipes_tab = (norm_active == "Recipes") or (norm_active is None and current_tab == "Recipes")
+            initial_recipes = (norm_active is None and tabs is None and not self.t_ric.tv.get_children() and self._cached_recipe_rows is None)
+            if explicit_recipes or on_recipes_tab or initial_recipes:
+                if not on_recipes_tab or getattr(self, "_recipes_dirty", False) or self._cached_recipe_rows is None:
                     self._cached_recipe_rows = self.recipe_rows(c)
                     self._recipes_dirty = False
                 self.t_ric.fill(self._cached_recipe_rows)
-            else:
+            elif "Pantry" in target_tabs:
                 self._recipes_dirty = True
 
-            if active_tab in (None, "Profile", "Profilo"):
+            if "Profile" in target_tabs:
                 p = m.load_profile(c)
+                self.load_profile_form(p)
                 if not (p and p.get("Weight_kg") is not None and p.get("Sex") is not None):
                     if hasattr(self, "profile_overlay"):
                         self.profile_overlay.place(relx=0, rely=0, relwidth=1.0, relheight=1.0)
@@ -852,20 +1089,26 @@ class App(BaseTk):
                                       for d, w, b, x in history])
                     self.chart.plot([(d, w) for d, w, _, _ in reversed(history)], *theme.palette(self.theme))
 
-            if active_tab in (None, "Setting", "Settings") and hasattr(self, "v_settings_section"):
+            if "Settings" in target_tabs and hasattr(self, "v_settings_section"):
                 sec = self.v_settings_section.get()
                 if sec == "full_profile" and hasattr(self, "_refresh_full_profile_view"):
-                    self._refresh_full_profile_view()
+                    self._refresh_full_profile_view(conn=c)
                 elif sec == "receipt_logs" and hasattr(self, "_refresh_receipt_logs_table"):
-                    self._refresh_receipt_logs_table()
+                    self._refresh_receipt_logs_table(conn=c)
 
     @staticmethod
     def recipe_rows(c):
         products, names, inv = m.load_products(c), m.product_names(c), m.VirtualInventory.from_db(c)
+        all_ingredients = m.load_recipe_ingredients(c)
+        all_groups = m.load_group_members(c)
         rows = []
         for recipe_id, name in c.execute("SELECT Recipe_ID, Name FROM RECIPES ORDER BY Name").fetchall():
-            sim = m.simulate_recipe(c, inv.copy(), recipe_id, products)
-            mac = m.recipe_macros(c, recipe_id, products, sim["group_choices"])
+            ings = all_ingredients.get(recipe_id, [])
+            sim = m.simulate_recipe(
+                c, inv.copy(), recipe_id, products,
+                ingredients=ings, group_members_map=all_groups,
+            )
+            mac = m.recipe_macros(c, recipe_id, products, sim["group_choices"], ingredients=ings)
             rows.append(((name, f"{mac['Kcal']:.0f}", f"{mac['Protein']:.1f}", f"{mac['Carbs']:.1f}",
                            f"{mac['Fat']:.1f}", f"{mac['Fiber']:.1f}", f"{sim['open_coverage'] * 100:.0f}%",
                            m.outcome(sim, products, names)), None if sim["feasible"] else "ko"))
@@ -896,7 +1139,8 @@ class App(BaseTk):
             add_item(v["name"], weight, num, v["location"], expiration_date=exp, **extra)
         self.msg(f"Added: {v['name']} ({num} x {weight:g}) in {v['location']}.")
         self.f_add.clear()
-        self.refresh()
+        self._recipes_dirty = True
+        self.refresh(tabs={"Pantry"}, select_tab=False)
 
     @safe
     def consume(self):
@@ -907,7 +1151,9 @@ class App(BaseTk):
             text += f" Insufficient availability: {r['shortfall']:g} missing, added to the shopping list."
         self.msg(text, r["insufficient_availability"])
         self.f_use.clear()
-        self.refresh()
+        self._recipes_dirty = True
+        tabs = {"Pantry", "Shopping"} if r["insufficient_availability"] else {"Pantry"}
+        self.refresh(tabs=tabs, select_tab=False)
 
     @safe
     def export_inventory(self):
@@ -937,20 +1183,32 @@ class App(BaseTk):
         try:
             if delete_inventory_item(row_id=row_id, db_path=self.db_path):
                 self.msg(f"Deleted '{item_name}' from inventory.")
-                self.refresh()
+                self._recipes_dirty = True
+                self.refresh(tabs={"Pantry"}, select_tab=False)
             else:
                 self.msg(f"Could not delete '{item_name}': item not found.", error=True)
         except Exception as e:
             self.msg(f"Error deleting item: {e}", error=True)
 
     def _on_edit_inventory_row(self, row_iid: str):
+        if getattr(self, "_editing_inventory", False):
+            return
         try:
             row_id = int(row_iid)
         except (ValueError, TypeError):
             return
-        if InventoryItemEditDialog(self, row_id=row_id, db_path=self.db_path).result:
-            self.msg("Inventory item updated successfully.")
-            self.refresh()
+        try:
+            self.t_disp.tv.selection_set(str(row_iid))
+        except Exception:
+            pass
+        self._editing_inventory = True
+        try:
+            if InventoryItemEditDialog(self, row_id=row_id, db_path=self.db_path).result:
+                self.msg("Inventory item updated successfully.")
+                self._recipes_dirty = True
+                self.refresh(tabs={"Pantry"}, select_tab=False)
+        finally:
+            self._editing_inventory = False
 
     def plan_params(self):
         date_str = self.v_date.get().strip()
@@ -999,7 +1257,7 @@ class App(BaseTk):
             pf.save_week(c, self.plans)
         self.msg("Plan saved. Shopping list updated.")
         self.show_saved()
-        self.refresh()
+        self.refresh(tabs={"Shopping"}, select_tab=False)
 
     def show_saved(self):
         date_str, days, _ = self.plan_params()
@@ -1035,7 +1293,8 @@ class App(BaseTk):
             pf.mark_cooked(c, date_str, meal, n)
         self.msg(f"Done: {meal} on {date_str} cooked, inventory updated" + (f" ({n - 1} leftovers available)." if n > 1 else "."))
         self.show_saved()
-        self.refresh()
+        self._recipes_dirty = True
+        self.refresh(tabs={"Pantry", "Shopping"}, select_tab=False)
 
     @safe
     def save_profile(self):
@@ -1071,7 +1330,7 @@ class App(BaseTk):
             c.commit()
         warning = data["Goal"] != "maintenance" and (data["Weekly_rate_kg"] or 0) > 1
         self.msg(f"Profile saved: target {kcal:.0f} kcal/day." + (" Warning: a rate above 1 kg/week is aggressive." if warning else ""), warning)
-        self.refresh()
+        self.refresh(tabs={"Profile"}, select_tab=False)
 
     @safe
     def add_ingredient(self):
@@ -1110,7 +1369,7 @@ class App(BaseTk):
         self.msg(f"Recipe '{name}' saved." + warning, bool(warning))
         self._cached_recipe_rows = None
         self._recipes_dirty = True
-        self.refresh()
+        self.refresh(tabs={"Recipes"}, select_tab=False)
 
     @safe
     def open_add_recipe_dialog(self, wait: bool = True):
@@ -1120,11 +1379,6 @@ class App(BaseTk):
     def add_recipe(self, wait: bool = True):
         """Alias for open_add_recipe_dialog."""
         return self.open_add_recipe_dialog(wait=wait)
-
-    @safe
-    def open_recipe_generator_dialog(self, wait: bool = True):
-        """Opens RecipeGeneratorDialog modal for hybrid slot + pairing + LP recipe generation."""
-        return RecipeGeneratorDialog(self, db_path=self._resolve_db_path(), wait=wait, on_save_callback=self._on_recipe_dialog_saved)
 
     def _ensure_recipes_loaded(self):
         with db() as c:
@@ -1168,7 +1422,7 @@ class App(BaseTk):
             messagebox.showwarning("Skipped recipes", "\n".join(errors[:15]))
         self._cached_recipe_rows = None
         self._recipes_dirty = True
-        self.refresh()
+        self.refresh(tabs={"Recipes"}, select_tab=False)
 
     @safe
     def delete_recipe(self):
@@ -1183,7 +1437,7 @@ class App(BaseTk):
         self.msg(f"Recipe '{name}' deleted.")
         self._cached_recipe_rows = None
         self._recipes_dirty = True
-        self.refresh()
+        self.refresh(tabs={"Recipes"}, select_tab=False)
 
     def selected_meal(self):
         selection = self.t_plan.tv.selection()
@@ -1241,16 +1495,20 @@ class App(BaseTk):
             f"Cook date: {cook_date}\nMeals planned on: {', '.join(target_dates)}",
             parent=self,
         )
-        self.refresh()
 
     # ---------------- location manager ----------------
+
+    def _refresh_locations(self):
+        locations = get_locations(db_path=self.db_path)
+        self.cb_loc["values"] = locations
+        self.f_add.w["location"]["values"] = locations
 
     @safe
     def loc_add(self):
         name = simpledialog.askstring("New location", "Location name:", parent=self)
         if name and name.strip():
             add_location(name.strip())
-            self.refresh()
+            self._refresh_locations()
             self.msg(f"Location '{name.strip()}' added.")
 
     @safe
@@ -1261,7 +1519,7 @@ class App(BaseTk):
         new = simpledialog.askstring("Rename location", f"New name for '{old}':", parent=self)
         if new and new.strip():
             rename_location(old, new.strip())
-            self.refresh()
+            self.refresh(tabs={"Pantry"}, select_tab=False)
             self.msg(f"Location '{old}' renamed to '{new.strip()}'.")
 
     @safe
@@ -1272,7 +1530,7 @@ class App(BaseTk):
         if messagebox.askyesno("Delete location", f"Delete location '{name}'?"):
             delete_location(name)
             self.v_loc_sel.set("")
-            self.refresh()
+            self._refresh_locations()
             self.msg(f"Location '{name}' deleted.")
 
     # ---------------- receipt actions ----------------
@@ -1405,7 +1663,8 @@ class App(BaseTk):
             pass
         if hasattr(self, "_last_receipt_var"):
             self._last_receipt_var.set(f"Last receipt loaded: {now:%Y-%m-%d %H:%M:%S}")
-        self.refresh()
+        self._recipes_dirty = True
+        self.refresh(tabs={"Pantry", "Settings"}, select_tab=False)
         self._receipt_log_write(
             f"  -> Successfully imported {imported_count} item(s) into inventory "
             f"({new_products} new product(s), {new_aliases} new alias(es)).\n\n"
@@ -1451,12 +1710,19 @@ class App(BaseTk):
                     self._receipt_log_write(f"  -> Mapped alias '{label}' -> '{canonical}' (ID {tid})\n")
             c.commit()
         if mapped > 0:
-            self.refresh()
+            self._recipes_dirty = True
+            self.refresh(tabs={"Pantry", "Recipes"}, select_tab=False)
             self.msg(f"Mapped {mapped} receipt alias(es) to catalog products.")
 
 
 def main():
-    App().mainloop()
+    try:
+        app = App()
+    except DatabaseIntegrityError as exc:
+        print(f"Database startup check failed: {exc}", file=sys.stderr)
+        return 1
+    app.mainloop()
+    return 0
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from tkinter import messagebox, ttk
 import tkinter as tk
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from meal_planner.gui import system_info, theme
 from meal_planner.gui.support import number
 from meal_planner.gui.widgets import Form
 from meal_planner.inventory import (
@@ -58,12 +59,32 @@ class BaseDialog(tk.Toplevel):
             self.transient(master)
         self.resizable(*resizable)
         if minsize:
-            self.minsize(*minsize)
+            mw, mh = theme.scale_px(minsize[0], self), theme.scale_px(minsize[1], self)
+            try:
+                sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            except Exception:
+                sw, sh = 1280, 800
+            _, _, cmw, cmh = system_info.clamp_geometry(mw, mh, sw, sh, min_w=mw, min_h=mh)
+            self.minsize(cmw, cmh)
         self.result = None
         self.last_error = None
         self._wait = wait
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.bind("<Escape>", lambda e: self._on_cancel())
+
+    def _apply_clamped_geometry(self, target_w: int, target_h: int, min_w: Optional[int] = None, min_h: Optional[int] = None):
+        tw = theme.scale_px(target_w, self)
+        th = theme.scale_px(target_h, self)
+        mw = theme.scale_px(min_w, self) if min_w is not None else None
+        mh = theme.scale_px(min_h, self) if min_h is not None else None
+        try:
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        except Exception:
+            sw, sh = 1280, 800
+        w, h, cmw, cmh = system_info.clamp_geometry(tw, th, sw, sh, min_w=mw, min_h=mh)
+        self.geometry(f"{w}x{h}")
+        if cmw is not None and cmh is not None:
+            self.minsize(cmw, cmh)
 
     def _finish_init(self, master=None, wait=True):
         _center_and_lift(self, master)
@@ -201,7 +222,7 @@ class MealPrepDialog(BaseDialog):
         ttk.Label(frame, text="For meals on dates\n(comma-separated):").grid(row=2, column=0, sticky="w", pady=4)
         self.v_dates = tk.StringVar()
         ttk.Entry(frame, textvariable=self.v_dates, width=35).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=4)
-        ttk.Label(frame, text="e.g. 2026-11-04, 2026-11-06", font=("TkDefaultFont", 8, "italic")).grid(row=3, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(frame, text="e.g. 2026-11-04, 2026-11-06", font=theme.font("caption_italic", self)).grid(row=3, column=1, sticky="w", padx=(8, 0))
         frame.columnconfigure(1, weight=1)
 
         btn_frame = ttk.Frame(self, padding=(12, 10))
@@ -250,7 +271,7 @@ class RoundedEntry(ttk.Entry):
 
     def __init__(self, master=None, dialog=None, **kwargs):
         self._dialog = dialog
-        self._bg = kwargs.pop("bg", kwargs.pop("background", getattr(dialog, "color_std", "#2b2b2b")))
+        self._bg = kwargs.pop("bg", kwargs.pop("background", getattr(dialog, "color_std", theme.palette("dark")[0])))
         self._fg = kwargs.pop("fg", kwargs.pop("foreground", None))
         for k in ("insertbackground", "relief", "bd", "highlightthickness", "highlightbackground", "highlightcolor", "font"):
             kwargs.pop(k, None)
@@ -298,10 +319,9 @@ class ReceiptReconciliationDialog(BaseDialog):
 
     def __init__(self, master, items: List[Any], db_path: Optional[str] = None, wait: bool = True):
         super().__init__(master, "Receipt Reconciliation - Review & Inventory Import", wait=False, minsize=(860, 420))
-        self.geometry("1180x620")
+        self._apply_clamped_geometry(1180, 620, min_w=860, min_h=420)
         self.db_path = db_path
 
-        from meal_planner.gui import theme
         current_theme = getattr(master, "theme", None) or theme.load()
         self.is_dark = (current_theme == "dark")
         bg_std, fg_std = theme.palette(current_theme)
@@ -358,33 +378,52 @@ class ReceiptReconciliationDialog(BaseDialog):
             from PIL import Image, ImageDraw, ImageTk
             style = ttk.Style(self)
             theme_tag = "dark" if self.is_dark else "light"
+            sf = theme.get_scale_factor(self)
+            w = max(36, theme.scale_px(36, self))
+            h = max(26, theme.scale_px(26, self))
+            supersample = 4
+            sw, sh = w * supersample, h * supersample
+            pad = supersample
+            radius = max(4, round(5 * sf * supersample))
+            stroke = max(1, round(1 * sf * supersample))
+            border_px = max(6, round(6 * sf))
+            rest_border = theme.surface_palette(theme_tag)["entry_border"]
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+
             for i in range(26):
                 if i == 0:
-                    fill, border = self.color_std, "#444444" if self.is_dark else "#cccccc"
+                    fill, border = self.color_std, rest_border
                 elif i <= 12:
                     t = i / 12.0
                     fill = self._interpolate_hex(self.color_std, self.color_red, t)
-                    border = self._interpolate_hex("#444444" if self.is_dark else "#cccccc", "#ef4444" if self.is_dark else "#b91c1c", t)
+                    border = self._interpolate_hex(rest_border, "#ef4444" if self.is_dark else "#b91c1c", t)
                 else:
                     t = (i - 12) / 13.0
                     fill = self._interpolate_hex(self.color_red, self.color_yellow, t)
                     border = self._interpolate_hex("#ef4444" if self.is_dark else "#b91c1c", "#eab308" if self.is_dark else "#ca8a04", t)
 
-                im = Image.new("RGBA", (36, 26), (0, 0, 0, 0))
+                im = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
                 d = ImageDraw.Draw(im)
-                d.rounded_rectangle((1, 1, 34, 24), radius=5, fill=fill, outline=border, width=1)
-                ph = ImageTk.PhotoImage(im)
+                d.rounded_rectangle(
+                    (pad, pad, sw - 1 - pad, sh - 1 - pad),
+                    radius=radius,
+                    fill=fill,
+                    outline=border,
+                    width=stroke,
+                )
+                im = im.resize((w, h), resample)
+                ph = ImageTk.PhotoImage(im, master=self)
                 self._style_photos.append(ph)
 
                 elem_name = f"RecFlash_{theme_tag}_{i}.field"
                 style_name = f"RecFlash_{i}.TEntry"
                 try:
-                    self.tk.call("ttk::style", "element", "create", elem_name, "image", ph, "-border", 6, "-sticky", "nsew")
+                    self.tk.call("ttk::style", "element", "create", elem_name, "image", ph, "-border", border_px, "-sticky", "nsew")
                 except tk.TclError:
                     pass
                 try:
                     style.layout(style_name, [(elem_name, {"sticky": "nswe", "children": [("Entry.padding", {"sticky": "nswe", "children": [("Entry.textarea", {"sticky": "nswe"})]})]})])
-                    style.configure(style_name, padding=(6, 1, 4, 2))
+                    style.configure(style_name, padding=(max(6, round(6 * sf)), 1, max(4, round(4 * sf)), max(2, round(2 * sf))))
                 except Exception:
                     pass
             _RECONCILIATION_FLASH_STYLES[cache_key] = self._style_photos
@@ -458,7 +497,7 @@ class ReceiptReconciliationDialog(BaseDialog):
     def _setup_ui(self, items: list):
         header = ttk.Frame(self, padding=(14, 10, 14, 4))
         header.pack(fill="x")
-        ttk.Label(header, text="Receipt Items Reconciliation", font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+        ttk.Label(header, text="Receipt Items Reconciliation", font=theme.font("subhead", self)).pack(anchor="w")
         ttk.Label(header, text="Review parsed receipt items below. Map items to existing products or define new products with nutritional values.").pack(anchor="w", pady=(2, 6))
 
         legend = ttk.Frame(header)
@@ -496,7 +535,7 @@ class ReceiptReconciliationDialog(BaseDialog):
                    ("Weight/Vol", 8), ("Packs", 5), ("Kcal", 6), ("Prot (g)", 6), ("Carb (g)", 6), ("Fat (g)", 6),
                    ("Location", 10), ("Expiry (YYYY-MM-DD)", 12)]
         for col_idx, (text, width) in enumerate(headers):
-            ttk.Label(self.table_frame, text=text, font=("TkDefaultFont", 9, "bold")).grid(row=0, column=col_idx, padx=3, pady=(2, 6), sticky="w")
+            ttk.Label(self.table_frame, text=text, font=theme.font("body_bold", self)).grid(row=0, column=col_idx, padx=3, pady=(2, 6), sticky="w")
 
         catalog_names = sorted(list(self.product_by_name.keys()), key=lambda s: s.lower())
         self.product_options = ["[New Product]"] + catalog_names
@@ -799,18 +838,18 @@ class MacroPromptDialog(BaseDialog):
         super().__init__(parent, "Macronutrient Modification", wait=False, resizable=(False, False))
         c = ttk.Frame(self, padding=16)
         c.pack(fill="both", expand=True)
-        ttk.Label(c, text=f"Modify Macronutrients for '{product_name}'", font=("TkDefaultFont", 11, "bold"), wraplength=440).pack(anchor="w", pady=(0, 8))
+        ttk.Label(c, text=f"Modify Macronutrients for '{product_name}'", font=theme.font("subhead", self), wraplength=440).pack(anchor="w", pady=(0, 8))
         ttk.Label(c, text="This product's macronutrients are linked across multiple items in the database.\nPlease choose how to apply your changes:", wraplength=440).pack(anchor="w", pady=(0, 14))
 
         f1 = ttk.LabelFrame(c, text="Option 1: Modify only that specific item", padding=10)
         f1.pack(fill="x", pady=4)
         ttk.Button(f1, text="Modify only that specific item", command=self._choose_single).pack(anchor="w", pady=(0, 4))
-        ttk.Label(f1, text="Allocates a new product ID. Updates only this inventory item.", font=("TkDefaultFont", 8, "italic"), wraplength=420).pack(anchor="w")
+        ttk.Label(f1, text="Allocates a new product ID. Updates only this inventory item.", font=theme.font("caption_italic", self), wraplength=420).pack(anchor="w")
 
         f2 = ttk.LabelFrame(c, text="Option 2: Propagate modification backwards across all linked instances", padding=10)
         f2.pack(fill="x", pady=6)
         ttk.Button(f2, text="Propagate the modification backwards across all linked instances", command=self._choose_propagate).pack(anchor="w", pady=(0, 4))
-        ttk.Label(f2, text="Updates the product record in place, preserving its product ID.", font=("TkDefaultFont", 8, "italic"), wraplength=420).pack(anchor="w")
+        ttk.Label(f2, text="Updates the product record in place, preserving its product ID.", font=theme.font("caption_italic", self), wraplength=420).pack(anchor="w")
 
         b_bar = ttk.Frame(c, padding=(0, 10, 0, 0))
         b_bar.pack(fill="x")
@@ -871,7 +910,7 @@ class InventoryItemEditDialog(BaseDialog):
     def _init_ui(self):
         main = ttk.Frame(self, padding=14)
         main.pack(fill="both", expand=True)
-        ttk.Label(main, text=f"Editing Inventory Item #{self.row_id} — {self.item_data.get('Name')}", font=("TkDefaultFont", 11, "bold")).pack(anchor="w", pady=(0, 12))
+        ttk.Label(main, text=f"Editing Inventory Item #{self.row_id} — {self.item_data.get('Name')}", font=theme.font("subhead", self)).pack(anchor="w", pady=(0, 12))
 
         f_inv = ttk.LabelFrame(main, text="Inventory Characteristics", padding=10)
         f_inv.pack(fill="x", pady=(0, 10))
@@ -1042,7 +1081,7 @@ class ProfileSetupDialog(BaseDialog):
         self.db_path = db_path
         c = ttk.Frame(self, padding=16)
         c.pack(fill="both", expand=True)
-        ttk.Label(c, text="Enter your details to get started:", font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        ttk.Label(c, text="Enter your details to get started:", font=theme.font("subhead", self)).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
 
         ttk.Label(c, text="Sex:").grid(row=1, column=0, sticky="w", pady=4)
         self.v_sex = tk.StringVar(value="M")
@@ -1191,7 +1230,7 @@ class QuickProductDialog(BaseDialog):
         self.db_path = db_path
         c = ttk.Frame(self, padding=14)
         c.pack(fill="both", expand=True)
-        ttk.Label(c, text=f"Product not found: '{name}'\nEnter details to add it to catalog:", font=("TkDefaultFont", 10, "bold"), wraplength=340).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        ttk.Label(c, text=f"Product not found: '{name}'\nEnter details to add it to catalog:", font=theme.font("body_bold", self), wraplength=340).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         ttk.Label(c, text="Name:").grid(row=1, column=0, sticky="w", pady=3)
         self.v_name = tk.StringVar(value=name)
@@ -1203,7 +1242,7 @@ class QuickProductDialog(BaseDialog):
         self.cb_unit = ttk.Combobox(c, textvariable=self.v_unit, values=["g", "kg", "ml", "L", "pcs"], state="readonly", width=10)
         self.cb_unit.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=3)
 
-        ttk.Label(c, text="Values per 100g:", font=("TkDefaultFont", 9, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        ttk.Label(c, text="Values per 100g:", font=theme.font("body_bold", self)).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 4))
 
         fields = [("kcal", "Kcal *:", "v_kcal", "0"), ("prot", "Protein (g) *:", "v_prot", "0"),
                   ("carb", "Carbs (g) *:", "v_carb", "0"), ("fat", "Fat (g) *:", "v_fat", "0"),
@@ -1291,13 +1330,30 @@ class AddRecipeDialog(BaseDialog):
         self.v_unit = tk.StringVar(value="g")
         self.v_to_taste = tk.BooleanVar(value=False)
 
+        self._theme_name = getattr(self.master, "theme", None)
         try:
             with self._get_conn() as conn:
                 self.v_meals = self._load_meals(conn=conn)
                 self._known_ingredients = self._load_known_ingredients(conn=conn)
+                if self._theme_name not in ("dark", "light"):
+                    try:
+                        rows = dict(
+                            conn.execute(
+                                "SELECT Key, Value FROM APP_SETTINGS WHERE Key IN ('default_theme', 'theme')"
+                            ).fetchall()
+                        )
+                        import json
+                        raw_t = rows.get("default_theme") or rows.get("theme")
+                        val = json.loads(raw_t) if raw_t is not None else None
+                        if val in ("dark", "light"):
+                            self._theme_name = val
+                    except Exception:
+                        pass
         except Exception:
             self.v_meals = self._load_meals()
             self._known_ingredients = self._load_known_ingredients()
+        if self._theme_name not in ("dark", "light"):
+            self._theme_name = "dark"
 
     def _load_meals(self, conn=None) -> _MealDict:
         meals = []
@@ -1347,7 +1403,8 @@ class AddRecipeDialog(BaseDialog):
 
         n_frame = ttk.LabelFrame(main, text="Preparation Notes", padding=8)
         n_frame.pack(fill="x", pady=(0, 8))
-        self.t_notes = tk.Text(n_frame, height=3, wrap="word")
+        self.t_notes = tk.Text(n_frame, height=3, wrap="word", font=theme.font("body", self))
+        theme.style_text(self.t_notes, getattr(self, "_theme_name", "dark"))
         self.t_notes.pack(fill="x", expand=True)
         self.t_notes.bind("<FocusOut>", lambda e: self.v_notes.set(self.notes))
 
@@ -1369,7 +1426,7 @@ class AddRecipeDialog(BaseDialog):
         self.btn_add_ingredient = ttk.Button(ing_box, text="Add", command=self.add_ingredient)
         self.btn_add_ingredient.grid(row=0, column=7, sticky="w", pady=2)
         ttk.Label(ing_box, text="ℹ️ 'To taste' (q.b. / quanto basta): for discretionary ingredients added to taste without fixed nutritional weight (e.g. salt, pepper, spices, herbs).",
-                  font=("TkDefaultFont", 8, "italic")).grid(row=1, column=0, columnspan=8, sticky="w", pady=(2, 0))
+                  font=theme.font("caption_italic", self)).grid(row=1, column=0, columnspan=8, sticky="w", pady=(2, 0))
 
         t_frame = ttk.LabelFrame(main, text="Added Ingredients (Recipe Total)", padding=8)
         t_frame.pack(fill="both", expand=True, pady=(0, 8))
@@ -1391,7 +1448,7 @@ class AddRecipeDialog(BaseDialog):
         sum_row = ttk.Frame(t_frame)
         sum_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         sum_row.columnconfigure(0, weight=1)
-        self.lbl_macro_summary = ttk.Label(sum_row, text="Total per serving (1 of 1): 0.0 kcal | Prot: 0.0g | Carbs: 0.0g | Fat: 0.0g", font=("TkDefaultFont", 9, "bold"))
+        self.lbl_macro_summary = ttk.Label(sum_row, text="Total per serving (1 of 1): 0.0 kcal | Prot: 0.0g | Carbs: 0.0g | Fat: 0.0g", font=theme.font("body_bold", self))
         self.lbl_macro_summary.grid(row=0, column=0, sticky="w")
         self.btn_remove_ingredient = ttk.Button(sum_row, text="Remove Ingredient", command=self.remove_ingredient)
         self.btn_remove_ingredient.grid(row=0, column=1, sticky="e")
@@ -1630,7 +1687,7 @@ class RecipeDetailsDialog(BaseDialog):
 
         header = ttk.Frame(main_frame)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(header, text=self.recipe_name, font=("TkDefaultFont", 13, "bold")).pack(anchor="w")
+        ttk.Label(header, text=self.recipe_name, font=theme.font("heading", self)).pack(anchor="w")
 
         notes = ""
         meals = []
@@ -1658,7 +1715,7 @@ class RecipeDetailsDialog(BaseDialog):
         except Exception:
             pass
 
-        ttk.Label(header, text=f"Associated meals: {', '.join(meals) if meals else 'All meals'}", font=("TkDefaultFont", 9)).pack(anchor="w", pady=(2, 0))
+        ttk.Label(header, text=f"Associated meals: {', '.join(meals) if meals else 'All meals'}", font=theme.font("body", self)).pack(anchor="w", pady=(2, 0))
         if notes:
             n_frame = ttk.LabelFrame(main_frame, text="Preparation Notes", padding=8)
             n_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
@@ -1692,254 +1749,16 @@ class RecipeDetailsDialog(BaseDialog):
         ttk.Label(
             t_frame,
             text="ℹ️ 'To taste' (q.b. / quanto basta): ingredients added as needed to taste without fixed nutritional weight (e.g. salt, pepper, spices).",
-            font=("TkDefaultFont", 8, "italic"),
+            font=theme.font("caption_italic", self),
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         kcal, prot, carb, fat, fiber = macros
         summary_frame = ttk.Frame(main_frame)
         summary_frame.grid(row=3, column=0, sticky="ew", pady=(0, 12))
         ttk.Label(summary_frame, text=f"Per-serving values: {kcal:.0f} kcal  |  Prot: {prot:.1f}g  |  Carbs: {carb:.1f}g  |  Fat: {fat:.1f}g  |  Fiber: {fiber:.1f}g",
-                  font=("TkDefaultFont", 9, "bold")).pack(side="left")
+                  font=theme.font("body_bold", self)).pack(side="left")
 
         btn_bar = ttk.Frame(main_frame)
         btn_bar.grid(row=4, column=0, sticky="ew")
         ttk.Button(btn_bar, text="Close", command=self.destroy).pack(side="right")
 
-
-class RecipeGeneratorDialog(BaseDialog):
-    """Interactive modal dialog for the Hybrid Recipe Generation Pipeline."""
-
-    ARCHETYPE_OPTIONS = [
-        "Auto (Default)",
-        "Grain / Pasta Dish",
-        "Main & Side Plate",
-        "One-Pot Balanced Bowl",
-        "Breakfast / Snack Bowl",
-    ]
-    MEAL_OPTIONS = ["lunch", "dinner", "breakfast"]
-
-    def __init__(self, master=None, db_path: Optional[str] = None, wait: bool = True, on_save_callback=None, auto_generate: bool = True):
-        super().__init__(master, "Generate Recipe (Slot + Pairing + LP Solver)", wait=False, minsize=(720, 580))
-        self.db_path = db_path
-        self._wait = wait
-        self.on_save_callback = on_save_callback
-        self._variation_index = 0
-        self.current_candidate = None
-        self.saved_outcome: Optional[Dict[str, Any]] = None
-
-        self.v_meal = tk.StringVar(value="lunch")
-        self.v_archetype = tk.StringVar(value=self.ARCHETYPE_OPTIONS[0])
-        self.v_target_kcal = tk.StringVar(value=str(int(self._fetch_default_kcal("lunch"))))
-        self.v_pantry_only = tk.BooleanVar(value=True)
-        self.v_title = tk.StringVar(value="")
-        self.v_meta = tk.StringVar(value="Select parameters and click Generate.")
-        self.v_macros = tk.StringVar(value="Per-serving macros: -")
-
-        self._init_ui()
-        self.bind("<Control-Return>", lambda e: self.save())
-        self.bind("<Control-s>", lambda e: self.save())
-        self.bind("<Control-S>", lambda e: self.save())
-
-        if auto_generate:
-            self.generate_proposal(show_errors=False)
-        self._finish_init(master, wait=wait)
-
-    def _fetch_default_kcal(self, meal_type: str) -> float:
-        from meal_planner.generator import get_default_target_kcal
-        try:
-            with self._get_conn() as conn:
-                return get_default_target_kcal(conn, meal_type)
-        except Exception:
-            return 700.0
-
-    def _on_meal_changed(self, _event=None):
-        meal = self.v_meal.get().strip().lower()
-        self.v_target_kcal.set(str(int(self._fetch_default_kcal(meal))))
-        self._variation_index = 0
-
-    def _init_ui(self):
-        main = ttk.Frame(self, padding=14)
-        main.pack(fill="both", expand=True)
-        main.columnconfigure(0, weight=1)
-        main.rowconfigure(2, weight=1)
-
-        params = ttk.LabelFrame(main, text="Generation Parameters", padding=10)
-        params.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        for col in range(5):
-            params.columnconfigure(col, weight=1 if col in (1, 3) else 0)
-
-        ttk.Label(params, text="Meal:").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=4)
-        self.cb_meal = ttk.Combobox(params, textvariable=self.v_meal, values=self.MEAL_OPTIONS, state="readonly", width=14)
-        self.cb_meal.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=4)
-        self.cb_meal.bind("<<ComboboxSelected>>", self._on_meal_changed)
-
-        ttk.Label(params, text="Archetype:").grid(row=0, column=2, sticky="w", padx=(0, 6), pady=4)
-        self.cb_archetype = ttk.Combobox(params, textvariable=self.v_archetype, values=self.ARCHETYPE_OPTIONS, state="readonly", width=24)
-        self.cb_archetype.grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=4)
-        self.cb_archetype.bind("<<ComboboxSelected>>", lambda e: setattr(self, "_variation_index", 0))
-
-        ttk.Label(params, text="Target kcal:").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=4)
-        self.e_target_kcal = ttk.Entry(params, textvariable=self.v_target_kcal, width=10)
-        self.e_target_kcal.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=4)
-
-        self.chk_pantry_only = ttk.Checkbutton(params, text="Pantry Only (prioritize opened & near-expiry FIFO)", variable=self.v_pantry_only)
-        self.chk_pantry_only.grid(row=1, column=2, columnspan=2, sticky="w", pady=4)
-
-        self.btn_generate = ttk.Button(params, text="✨ Generate", command=self.generate_proposal)
-        self.btn_generate.grid(row=0, column=4, rowspan=2, sticky="ns", padx=(8, 0), pady=2)
-
-        t_frame = ttk.LabelFrame(main, text="Proposed Recipe", padding=10)
-        t_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        t_frame.columnconfigure(1, weight=1)
-        ttk.Label(t_frame, text="Recipe Name:").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.e_title = ttk.Entry(t_frame, textvariable=self.v_title, font=("TkDefaultFont", 10, "bold"))
-        self.e_title.grid(row=0, column=1, sticky="ew")
-        ttk.Label(t_frame, textvariable=self.v_meta, font=("TkDefaultFont", 8)).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
-
-        center = ttk.Frame(main)
-        center.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
-        center.columnconfigure(0, weight=1)
-        center.rowconfigure(0, weight=3)
-        center.rowconfigure(1, weight=2)
-
-        ing_frame = ttk.LabelFrame(center, text="Optimized Ingredients (1 serving)", padding=8)
-        ing_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
-        ing_frame.columnconfigure(0, weight=1)
-        ing_frame.rowconfigure(0, weight=1)
-
-        cols = ("name", "role", "quantity", "unit", "to_taste", "status")
-        self.t_ingredients = ttk.Treeview(ing_frame, columns=cols, show="headings", height=6)
-        for col, (head, w, a) in zip(cols, (("Ingredient", 190, "w"), ("Slot / Role", 120, "w"), ("Quantity", 80, "e"),
-                                            ("Unit", 60, "center"), ("To taste (q.b.)", 95, "center"), ("Pantry Status", 120, "center"))):
-            self.t_ingredients.heading(col, text=head)
-            self.t_ingredients.column(col, width=w, anchor=a)
-
-        sb = ttk.Scrollbar(ing_frame, orient="vertical", command=self.t_ingredients.yview)
-        self.t_ingredients.configure(yscrollcommand=sb.set)
-        self.t_ingredients.grid(row=0, column=0, sticky="nsew")
-        sb.grid(row=0, column=1, sticky="ns")
-
-        ttk.Label(ing_frame, text="ℹ️ 'To taste' (q.b. / quanto basta): discretionary seasoning added to taste (e.g. herbs, spices, grated cheese).",
-                  font=("TkDefaultFont", 8, "italic")).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
-
-        notes_frame = ttk.LabelFrame(center, text="Synthesized Preparation Steps (Editable)", padding=8)
-        notes_frame.grid(row=1, column=0, sticky="nsew")
-        notes_frame.columnconfigure(0, weight=1)
-        notes_frame.rowconfigure(0, weight=1)
-        self.txt_notes = tk.Text(notes_frame, height=4, wrap="word", font=("TkDefaultFont", 9))
-        notes_sb = ttk.Scrollbar(notes_frame, orient="vertical", command=self.txt_notes.yview)
-        self.txt_notes.configure(yscrollcommand=notes_sb.set)
-        self.txt_notes.grid(row=0, column=0, sticky="nsew")
-        notes_sb.grid(row=0, column=1, sticky="ns")
-
-        macro_frame = ttk.Frame(main)
-        macro_frame.grid(row=3, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(macro_frame, textvariable=self.v_macros, font=("TkDefaultFont", 9, "bold")).pack(side="left")
-
-        btn_bar = ttk.Frame(main)
-        btn_bar.grid(row=4, column=0, sticky="ew")
-        self.btn_regenerate = ttk.Button(btn_bar, text="🎲 Regenerate / Try Another", command=self.regenerate_proposal)
-        self.btn_regenerate.pack(side="left")
-        ttk.Button(btn_bar, text="Cancel", command=self.cancel).pack(side="right", padx=(6, 0))
-        self.btn_save = ttk.Button(btn_bar, text="💾 Save to Recipes", command=self.save)
-        self.btn_save.pack(side="right")
-
-    def generate_proposal(self, show_errors: bool = True) -> bool:
-        from meal_planner.generator import RecipeGenerator
-        meal_type = (self.v_meal.get() or "lunch").strip().lower()
-        arch_sel = (self.v_archetype.get() or "").strip()
-        archetype_name = None if (not arch_sel or arch_sel.startswith("Auto")) else arch_sel
-        pantry_only = bool(self.v_pantry_only.get())
-
-        try:
-            raw_kcal = self.v_target_kcal.get().strip()
-            target_kcal = float(raw_kcal.replace(",", ".")) if raw_kcal else None
-            if target_kcal is not None and (not math.isfinite(target_kcal) or target_kcal <= 0):
-                raise ValueError("Target kcal must be a positive number.")
-        except ValueError as exc:
-            self.last_error = str(exc)
-            if show_errors and self._wait:
-                messagebox.showerror("Invalid Input", str(exc), parent=self)
-            return False
-
-        try:
-            gen = RecipeGenerator(db_path=self.db_path)
-            try:
-                candidate = gen.generate_recipe(target_kcal=target_kcal, meal_type=meal_type, archetype_name=archetype_name,
-                                                pantry_only=pantry_only, db_path=self.db_path, variation_index=self._variation_index)
-            except ValueError:
-                if pantry_only:
-                    candidate = gen.generate_recipe(target_kcal=target_kcal, meal_type=meal_type, archetype_name=archetype_name,
-                                                    pantry_only=False, db_path=self.db_path, variation_index=self._variation_index)
-                    candidate.warnings.append("Some required slots were missing in pantry; included catalog suggestions.")
-                else:
-                    raise
-        except Exception as exc:
-            self.last_error = str(exc)
-            if show_errors and self._wait:
-                messagebox.showerror("Generation Error", str(exc), parent=self)
-            return False
-
-        self.last_error = None
-        self.current_candidate = candidate
-        self._populate_candidate(candidate)
-        return True
-
-    def regenerate_proposal(self) -> bool:
-        self._variation_index += 1
-        return self.generate_proposal(show_errors=True)
-
-    def _populate_candidate(self, candidate):
-        self.v_title.set(candidate.title)
-        warn_str = f"  |  ⚠️ {candidate.warnings[0]}" if candidate.warnings else ""
-        self.v_meta.set(f"Archetype: {candidate.archetype_name}  |  Meal: {candidate.meal_type.capitalize()}  |  "
-                        f"Solver: {candidate.solver_status}  |  Caloric delta: {candidate.caloric_delta_pct:.1f}%{warn_str}")
-
-        for iid in self.t_ingredients.get_children():
-            self.t_ingredients.delete(iid)
-        for ing in candidate.ingredients:
-            qty, unit = ing.calculate_display_quantity()
-            role_label = ing.role.value if hasattr(ing.role, "value") else str(ing.role)
-            status_str = "Missing (To buy)" if ing.is_missing else ("Opened (FIFO)" if ing.is_open else "In pantry")
-            self.t_ingredients.insert("", "end", values=(ing.name, role_label, f"{qty:g}", unit, "Yes" if ing.to_taste else "No", status_str))
-
-        self.txt_notes.delete("1.0", "end")
-        self.txt_notes.insert("1.0", candidate.notes or "")
-        self.v_macros.set(f"Per-serving values: {candidate.total_kcal:.0f} kcal (Target: {candidate.target_kcal:.0f} kcal)  |  "
-                          f"Prot: {candidate.total_protein:.1f}g  |  Carbs: {candidate.total_carbs:.1f}g  |  "
-                          f"Fat: {candidate.total_fat:.1f}g  |  Fiber: {candidate.total_fiber:.1f}g")
-
-    def save(self) -> bool:
-        from meal_planner import recipes as rc
-        if self.current_candidate is None and not self.generate_proposal(show_errors=True):
-            return False
-        title = self.v_title.get().strip()
-        if not title:
-            messagebox.showerror("Missing Recipe Name", "Please enter a name for the recipe.", parent=self)
-            return False
-        notes = self.txt_notes.get("1.0", "end-1c").strip()
-        meal_type = (self.v_meal.get() or self.current_candidate.meal_type or "lunch").strip().lower()
-        kwargs = self.current_candidate.to_create_recipe_kwargs()
-        kwargs["name"] = title
-        kwargs["meals"] = [meal_type]
-        kwargs["notes"] = notes
-        try:
-            with self._get_conn() as conn:
-                outcome = rc.create_recipe(conn, **kwargs)
-        except Exception as exc:
-            self.last_error = str(exc)
-            if self._wait: messagebox.showerror("Save Error", str(exc), parent=self)
-            return False
-        outcome["Name"] = title
-        self.saved_outcome = outcome
-        if callable(self.on_save_callback):
-            self.on_save_callback(outcome)
-        self.destroy()
-        return True
-
-    def _on_cancel(self):
-        self.saved_outcome = None
-        super()._on_cancel()
-
-    def cancel(self):
-        self._on_cancel()

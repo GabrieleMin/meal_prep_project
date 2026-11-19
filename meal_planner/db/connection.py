@@ -43,13 +43,17 @@ def get_connection(db_path: str = None) -> sqlite3.Connection:
         _VERIFIED_DIRS.add(dir_path)
 
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON;")
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
 
-    norm_path = os.path.abspath(db_path) if db_path != ":memory:" else ":memory:"
-    if norm_path not in _WAL_CONFIGURED_PATHS:
-        if conn.execute("PRAGMA journal_mode;").fetchone()[0].lower() != "wal":
-            conn.execute("PRAGMA journal_mode = WAL;")
-        _WAL_CONFIGURED_PATHS.add(norm_path)
+        norm_path = os.path.abspath(db_path) if db_path != ":memory:" else ":memory:"
+        if norm_path not in _WAL_CONFIGURED_PATHS:
+            if conn.execute("PRAGMA journal_mode;").fetchone()[0].lower() != "wal":
+                conn.execute("PRAGMA journal_mode = WAL;")
+            _WAL_CONFIGURED_PATHS.add(norm_path)
 
-    conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+    except Exception:
+        conn.close()
+        raise
     return conn

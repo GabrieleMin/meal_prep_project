@@ -940,7 +940,7 @@ class TestEmptyStateOverlayExactTextAndRendering(ChallengerM2BaseTestCase):
             app.destroy()
 
     def test_empty_state_overlay_polygon_card_properties(self):
-        """Inspects card polygon shape, tags, and button element on canvas."""
+        """Inspects crisp PIL card shape, tags, and button element on canvas."""
         app = App()
         try:
             app.refresh(active_tab="Profilo")
@@ -948,15 +948,19 @@ class TestEmptyStateOverlayExactTextAndRendering(ChallengerM2BaseTestCase):
 
             c = app.profile_overlay
             polygon_items = [it for it in c.find_all() if c.type(it) == "polygon"]
-            self.assertGreaterEqual(len(polygon_items), 1, "Canvas must contain a polygon card")
+            self.assertEqual(len(polygon_items), 0, "Overlay card must not use un-antialiased canvas polygon")
 
-            card_poly = polygon_items[0]
-            tags = c.gettags(card_poly)
-            self.assertIn("overlay_card", tags, "Card polygon must be tagged 'overlay_card'")
+            image_items = [it for it in c.find_all() if c.type(it) == "image"]
+            self.assertGreaterEqual(len(image_items), 1, "Canvas must contain an anti-aliased image card")
 
-            # Check coordinates form a rounded card polygon (multiple vertices)
-            coords = c.coords(card_poly)
-            self.assertGreaterEqual(len(coords), 16, "Card polygon must have multiple points for smooth rounded corners")
+            card_item = image_items[0]
+            tags = c.gettags(card_item)
+            self.assertIn("overlay_card", tags, "Card image must be tagged 'overlay_card'")
+
+            bbox = c.bbox(card_item)
+            self.assertIsNotNone(bbox, "Card image must have a valid bounding box")
+            self.assertGreater(bbox[2] - bbox[0], 200)
+            self.assertGreater(bbox[3] - bbox[1], 100)
 
             # Check action button window item on canvas
             btn_items = c.find_withtag("overlay_btn")
@@ -1407,17 +1411,17 @@ class TestInteractiveProfileSetupDialog(ChallengerM2BaseTestCase):
             app.destroy()
 
     def test_launch_profile_setup_dialog_from_card_click(self):
-        """Simulates clicking the overlay card polygon, filling dialog, saving, and verifying dismissal."""
+        """Simulates clicking the overlay card, filling dialog, saving, and verifying dismissal."""
         app = App()
         try:
             app.refresh(active_tab="Profilo")
             app.update_idletasks()
 
             c = app.profile_overlay
-            coords = c.coords("overlay_card")
-            self.assertGreaterEqual(len(coords), 4)
-            cx = sum(coords[0::2]) / (len(coords) / 2)
-            cy = sum(coords[1::2]) / (len(coords) / 2)
+            bbox = c.bbox("overlay_card")
+            self.assertIsNotNone(bbox)
+            cx = (bbox[0] + bbox[2]) / 2
+            cy = (bbox[1] + bbox[3]) / 2
 
             def mock_wait_window(dialog_self, *args, **kwargs):
                 self.assertIsInstance(dialog_self, ProfileSetupDialog)
